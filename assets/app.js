@@ -10,6 +10,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     modalTransitionMs: 240,
     overlayTransitionMs: 240,
     toastDurationMs: 3200,
+    emptyDescriptionSentinel: "\u200B",
   };
 
   const state = {
@@ -340,6 +341,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 
     const title = dom.addTitle.value.trim();
     const description = dom.addDescription.value.trim();
+    const descriptionForApi = encodeDescriptionForBackend(description);
     let invalid = false;
 
     if (!title) {
@@ -356,7 +358,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     renderAddImagePreview();
 
     try {
-      const payload = { title, description };
+      const payload = { title, description: descriptionForApi };
       if (state.addForm.image) {
         payload.imageDataUrl = state.addForm.image.dataUrl;
         payload.imageName = state.addForm.image.imageName;
@@ -1202,6 +1204,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     const draft = state.noteModal.editDraft;
     const title = (draft.title || "").trim();
     const description = (draft.description || "").trim();
+    const descriptionForApi = encodeDescriptionForBackend(description);
 
     const titleEl = dom.noteModalBody.querySelector("#modal-edit-title");
     const descEl = dom.noteModalBody.querySelector("#modal-edit-description");
@@ -1220,7 +1223,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     renderNoteModal();
 
     try {
-      const data = { title, description };
+      const data = { title, description: descriptionForApi };
       if (draft.newImage) {
         data.imageDataUrl = draft.newImage.dataUrl;
         data.imageName = draft.newImage.imageName;
@@ -1510,8 +1513,8 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
         source.rowID
       ),
       title: String(coalesce(source.title, source.noteTitle, source.subject, "") || ""),
-      description: String(
-        coalesce(source.description, source.noteDescription, source.detail, source.desc, "") || ""
+      description: decodeDescriptionFromBackend(
+        String(coalesce(source.description, source.noteDescription, source.detail, source.desc, "") || "")
       ),
       status: normalizeStatus(coalesce(source.status, source.noteStatus, source.state, "")),
       createdAt: coalesce(source.createdAt, source.createdDate, source.created_date, source.timestamp, ""),
@@ -1562,6 +1565,22 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       if (value !== undefined && value !== null && value !== "") return value;
     }
     return "";
+  }
+
+  function encodeDescriptionForBackend(description) {
+    const text = String(description || "");
+    return text ? text : CONFIG.emptyDescriptionSentinel;
+  }
+
+  function decodeDescriptionFromBackend(description) {
+    const text = String(description || "");
+    if (!text) return "";
+
+    const withoutSentinel = text.replace(/\u200B/g, "");
+    if (!withoutSentinel.trim()) {
+      return "";
+    }
+    return withoutSentinel;
   }
 
   async function compressImageFile(file) {
