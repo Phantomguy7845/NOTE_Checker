@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0d2e57">
+  <title>NOTE Checker</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar__brand">
+        <div class="brand-mark" aria-hidden="true">NC</div>
+        <div class="brand-copy">
+          <h1>NOTE Checker</h1>
+          <p>Field &amp; Business Notes</p>
+        </div>
+      </div>
+
+      <div class="topbar__status" id="api-status" data-state="idle" aria-live="polite">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="api-status-text">API: ยังไม่เชื่อมต่อ</span>
+      </div>
+
+      <div class="topbar__actions">
+        <button type="button" class="btn btn--ghost btn--sm" id="btn-refresh-all">รีเฟรช</button>
+        <button
+          type="button"
+          class="btn btn--primary btn--sm"
+          id="btn-open-history"
+          aria-controls="history-panel"
+          aria-expanded="false"
+        >
+          ประวัติ (Done)
+        </button>
+      </div>
+    </header>
+
+    <main class="page-grid">
+      <section class="panel panel--add">
+        <div class="panel__header">
+          <div>
+            <h2>Add Note</h2>
+            <p>เพิ่ม NOTE ใหม่สำหรับงานภาคสนาม/งานธุรกิจ</p>
+          </div>
+        </div>
+
+        <form id="add-note-form" class="form-stack" novalidate>
+          <label class="field">
+            <span class="field__label">หัวข้อ *</span>
+            <input
+              id="add-title"
+              name="title"
+              type="text"
+              maxlength="160"
+              placeholder="เช่น ติดตามลูกค้าร้าน A / ตรวจหน้างานไซต์ B"
+              required
+            >
+          </label>
+
+          <label class="field">
+            <span class="field__label">รายละเอียด *</span>
+            <textarea
+              id="add-description"
+              name="description"
+              rows="6"
+              maxlength="5000"
+              placeholder="บันทึกรายละเอียดที่ต้องทำ / สิ่งที่พบ / สิ่งที่ต้องติดตามต่อ"
+              required
+            ></textarea>
+          </label>
+
+          <div class="field">
+            <span class="field__label">รูปภาพ (ไม่บังคับ)</span>
+            <input id="add-image-input" type="file" accept="image/*" class="hidden-input">
+            <div class="inline-row">
+              <button type="button" class="btn btn--secondary btn--sm" id="btn-add-pick-image">เลือกรูป</button>
+              <button type="button" class="btn btn--danger-soft btn--sm" id="btn-add-remove-image" disabled>ลบรูป</button>
+            </div>
+            <p class="field__hint">ระบบจะบีบอัดรูปอัตโนมัติ (max 1280px, JPEG q=0.78) ก่อนส่ง API</p>
+          </div>
+
+          <div class="image-preview-card" id="add-image-preview-card" data-empty="true">
+            <div class="image-preview-card__frame">
+              <img id="add-image-preview" alt="ตัวอย่างรูปก่อนบันทึก" hidden>
+              <div id="add-image-placeholder" class="image-placeholder">
+                ยังไม่ได้เลือกรูป
+              </div>
+            </div>
+            <div class="image-preview-card__meta">
+              <p id="add-image-meta">รองรับไฟล์ภาพจากมือถือ/คอมพิวเตอร์</p>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn--primary btn--block" id="btn-add-submit">
+              บันทึก NOTE
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel panel--pending">
+        <div class="panel__header panel__header--split">
+          <div>
+            <h2>Pending List</h2>
+            <p>รายการ NOTE ที่ยังไม่เสร็จ</p>
+          </div>
+          <div class="panel__meta">
+            <span class="badge badge--subtle" id="pending-count">0 รายการ</span>
+          </div>
+        </div>
+
+        <div class="toolbar-grid">
+          <label class="field field--compact">
+            <span class="field__label">ค้นหา</span>
+            <input id="pending-search" type="search" placeholder="ค้นหา title / description">
+          </label>
+
+          <label class="field field--compact">
+            <span class="field__label">วันที่สร้าง</span>
+            <input id="pending-date" type="date">
+          </label>
+
+          <label class="field field--compact">
+            <span class="field__label">เรียงลำดับ</span>
+            <select id="pending-sort">
+              <option value="OLDEST">OLDEST</option>
+              <option value="NEWEST">NEWEST</option>
+              <option value="A_Z">A_Z</option>
+              <option value="Z_A">Z_A</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="list-wrap">
+          <ul id="pending-list" class="note-list" aria-live="polite"></ul>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="history-backdrop" class="overlay hidden" aria-hidden="true"></div>
+  <aside id="history-panel" class="history-panel" aria-hidden="true" aria-labelledby="history-title">
+    <div class="history-panel__header">
+      <div>
+        <h2 id="history-title">Done History</h2>
+        <p>ประวัติรายการที่ทำเสร็จแล้ว</p>
+      </div>
+      <button type="button" class="icon-btn" id="btn-close-history" aria-label="ปิดประวัติ">
+        <span aria-hidden="true">&times;</span>
+      </button>
+    </div>
+
+    <div class="toolbar-grid toolbar-grid--sidebar">
+      <label class="field field--compact">
+        <span class="field__label">ค้นหา</span>
+        <input id="history-search" type="search" placeholder="ค้นหา title / description">
+      </label>
+
+      <label class="field field--compact">
+        <span class="field__label">วันที่สร้าง</span>
+        <input id="history-date" type="date">
+      </label>
+
+      <label class="field field--compact">
+        <span class="field__label">เรียงลำดับ</span>
+        <select id="history-sort">
+          <option value="NEWEST">NEWEST</option>
+          <option value="OLDEST">OLDEST</option>
+          <option value="A_Z">A_Z</option>
+          <option value="Z_A">Z_A</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="history-panel__meta">
+      <span class="badge badge--subtle" id="history-count">0 รายการ</span>
+    </div>
+
+    <div class="list-wrap list-wrap--sidebar">
+      <ul id="history-list" class="note-list" aria-live="polite"></ul>
+    </div>
+  </aside>
+
+  <div id="note-modal-backdrop" class="overlay hidden" aria-hidden="true"></div>
+  <div id="note-modal-shell" class="modal-shell hidden" aria-hidden="true">
+    <section
+      class="modal-card modal-card--lg"
+      id="note-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="note-modal-heading"
+    >
+      <div class="modal-card__header">
+        <div>
+          <h2 id="note-modal-heading">รายละเอียด NOTE</h2>
+          <p id="note-modal-subheading">โหลดข้อมูล...</p>
+        </div>
+        <button type="button" class="icon-btn" data-action="close-note-modal" aria-label="ปิดหน้าต่างรายละเอียด">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div id="note-modal-body" class="modal-card__body"></div>
+    </section>
+  </div>
+
+  <div id="confirm-backdrop" class="overlay hidden" aria-hidden="true"></div>
+  <div id="confirm-shell" class="modal-shell modal-shell--confirm hidden" aria-hidden="true">
+    <section class="modal-card modal-card--sm" role="dialog" aria-modal="true" aria-labelledby="confirm-heading">
+      <div class="modal-card__header modal-card__header--compact">
+        <div>
+          <h2 id="confirm-heading">ยืนยัน Checklist</h2>
+          <p>ยืนยันว่ารายการนี้ทำเสร็จแล้ว</p>
+        </div>
+      </div>
+      <div class="modal-card__body">
+        <p class="confirm-copy">เมื่อยืนยัน รายการจะถูกย้ายจาก Pending ไปยัง History ทันที</p>
+        <div class="confirm-note-box" id="confirm-note-box">
+          <p id="confirm-note-title" class="confirm-note-box__title">-</p>
+          <p id="confirm-note-meta" class="confirm-note-box__meta">-</p>
+        </div>
+      </div>
+      <div class="modal-card__footer">
+        <button type="button" class="btn btn--ghost" id="btn-confirm-cancel">ยกเลิก</button>
+        <button type="button" class="btn btn--success" id="btn-confirm-submit">ยืนยัน</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="global-loading" class="global-loading hidden" aria-live="polite">
+    <div class="global-loading__card">
+      <span class="spinner" aria-hidden="true"></span>
+      <p id="global-loading-text">กำลังโหลดข้อมูล...</p>
+    </div>
+  </div>
+
+  <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
+
+  <script src="assets/app.js"></script>
+</body>
+</html>
