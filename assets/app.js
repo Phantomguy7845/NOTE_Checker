@@ -1389,16 +1389,18 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
   }
 
   async function apiPost(action, payload = {}) {
+    const isObjectPayload = payload && typeof payload === "object" && !Array.isArray(payload);
+    const requestBody = isObjectPayload
+      ? { action, ...payload, payload }
+      : { action, payload };
+
     return requestJson(API_BASE, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify({
-        action,
-        payload,
-      }),
+      body: JSON.stringify(requestBody),
     });
   }
 
