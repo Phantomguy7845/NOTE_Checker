@@ -195,6 +195,41 @@ img {
   padding: 14px;
 }
 
+.panel--add-launcher {
+  display: grid;
+  align-content: start;
+}
+
+.add-launcher {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  min-height: 180px;
+  padding: 4px;
+}
+
+.add-launcher__copy h2 {
+  color: var(--navy);
+  font-size: 1rem;
+}
+
+.add-launcher__copy p {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.panel--add-embedded {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  padding: 0;
+}
+
+.add-page-card .modal-card__body {
+  background: linear-gradient(180deg, #fbfdff 0%, #f7fbff 100%);
+}
+
 .panel__header {
   margin-bottom: 14px;
 }
@@ -1082,7 +1117,7 @@ textarea.is-invalid {
     padding: 16px;
   }
 
-  .panel--add {
+  .panel--add-launcher {
     position: sticky;
     top: calc(var(--topbar-height) + 14px);
   }

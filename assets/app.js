@@ -34,6 +34,9 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       compressing: false,
       image: null,
     },
+    addPage: {
+      open: false,
+    },
     sidebar: {
       open: false,
     },
@@ -89,6 +92,11 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     dom.apiStatusText = document.getElementById("api-status-text");
     dom.btnRefreshAll = document.getElementById("btn-refresh-all");
     dom.btnOpenHistory = document.getElementById("btn-open-history");
+    dom.btnOpenAddPage = document.getElementById("btn-open-add-page");
+
+    dom.addPageBackdrop = document.getElementById("add-page-backdrop");
+    dom.addPageShell = document.getElementById("add-page-shell");
+    dom.btnCloseAddPage = document.getElementById("btn-close-add-page");
 
     dom.addNoteForm = document.getElementById("add-note-form");
     dom.addTitle = document.getElementById("add-title");
@@ -101,6 +109,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     dom.addImagePlaceholder = document.getElementById("add-image-placeholder");
     dom.addImageMeta = document.getElementById("add-image-meta");
     dom.btnAddSubmit = document.getElementById("btn-add-submit");
+    dom.btnAddCancel = document.getElementById("btn-add-cancel");
 
     dom.pendingSearch = document.getElementById("pending-search");
     dom.pendingDate = document.getElementById("pending-date");
@@ -148,9 +157,14 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     }, CONFIG.searchDebounceMs);
 
     dom.btnRefreshAll.addEventListener("click", handleRefreshAll);
+    dom.btnOpenAddPage.addEventListener("click", openAddPage);
     dom.btnOpenHistory.addEventListener("click", openHistoryPanel);
     dom.btnCloseHistory.addEventListener("click", closeHistoryPanel);
     dom.historyBackdrop.addEventListener("click", closeHistoryPanel);
+
+    dom.addPageBackdrop.addEventListener("click", () => closeAddPage());
+    dom.btnCloseAddPage.addEventListener("click", () => closeAddPage());
+    dom.btnAddCancel.addEventListener("click", () => closeAddPage());
 
     dom.addNoteForm.addEventListener("submit", handleAddNoteSubmit);
     dom.addTitle.addEventListener("input", () => dom.addTitle.classList.remove("is-invalid"));
@@ -288,6 +302,34 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     }
   }
 
+  function openAddPage() {
+    if (state.addPage.open) return;
+    state.addPage.open = true;
+
+    showModalElements(dom.addPageBackdrop, dom.addPageShell);
+    dom.addPageShell.setAttribute("aria-hidden", "false");
+    dom.addPageBackdrop.setAttribute("aria-hidden", "false");
+    syncBodyScrollLock();
+
+    window.setTimeout(() => {
+      if (state.addPage.open) {
+        dom.addTitle.focus();
+      }
+    }, CONFIG.modalTransitionMs);
+  }
+
+  function closeAddPage(options = {}) {
+    const force = Boolean(options.force);
+    if (!state.addPage.open) return;
+    if (!force && (state.addForm.saving || state.addForm.compressing)) return;
+
+    state.addPage.open = false;
+    hideModalElements(dom.addPageBackdrop, dom.addPageShell);
+    dom.addPageShell.setAttribute("aria-hidden", "true");
+    dom.addPageBackdrop.setAttribute("aria-hidden", "true");
+    syncBodyScrollLock();
+  }
+
   async function handleAddNoteSubmit(event) {
     event.preventDefault();
     if (state.addForm.saving || state.addForm.compressing) return;
@@ -315,6 +357,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 
     state.addForm.saving = true;
     setButtonBusy(dom.btnAddSubmit, true, "กำลังบันทึก...");
+    renderAddImagePreview();
 
     try {
       const payload = { title, description };
@@ -332,12 +375,14 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       dom.addTitle.classList.remove("is-invalid");
       dom.addDescription.classList.remove("is-invalid");
 
+      closeAddPage({ force: true });
       await refreshPendingNotes();
     } catch (error) {
       showToast("error", `บันทึก NOTE ไม่สำเร็จ: ${getErrorMessage(error)}`);
     } finally {
       state.addForm.saving = false;
       setButtonBusy(dom.btnAddSubmit, false);
+      renderAddImagePreview();
     }
   }
 
@@ -385,9 +430,12 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
   function renderAddImagePreview() {
     const image = state.addForm.image;
     const isBusy = state.addForm.compressing;
+    const isFormLocked = state.addForm.saving || isBusy;
 
-    dom.btnAddPickImage.disabled = state.addForm.saving || isBusy;
-    dom.btnAddRemoveImage.disabled = !image && !isBusy;
+    dom.btnAddPickImage.disabled = isFormLocked;
+    dom.btnAddRemoveImage.disabled = isFormLocked || (!image && !isBusy);
+    dom.btnAddCancel.disabled = isFormLocked;
+    dom.btnCloseAddPage.disabled = isFormLocked;
 
     if (isBusy) {
       dom.addImagePreview.hidden = true;
@@ -1293,13 +1341,18 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       closeNoteModal();
       return;
     }
+    if (state.addPage.open) {
+      closeAddPage();
+      return;
+    }
     if (state.sidebar.open) {
       closeHistoryPanel();
     }
   }
 
   function syncBodyScrollLock() {
-    const shouldLock = state.sidebar.open || state.noteModal.open || state.confirm.open;
+    const shouldLock =
+      state.sidebar.open || state.noteModal.open || state.confirm.open || state.addPage.open;
     dom.body.classList.toggle("no-scroll", shouldLock);
   }
 

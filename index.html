@@ -38,67 +38,16 @@
     </header>
 
     <main class="page-grid">
-      <section class="panel panel--add">
-        <div class="panel__header">
-          <div>
+      <section class="panel panel--add-launcher">
+        <div class="add-launcher">
+          <div class="add-launcher__copy">
             <h2>Add Note</h2>
-            <p>เพิ่ม NOTE ใหม่สำหรับงานภาคสนาม/งานธุรกิจ</p>
+            <p>เพิ่ม NOTE ใหม่เมื่อจำเป็น แล้วกลับมาที่หน้ารายการเดิมอัตโนมัติหลังบันทึก</p>
           </div>
+          <button type="button" class="btn btn--primary btn--block" id="btn-open-add-page">
+            เปิดหน้า Add Note
+          </button>
         </div>
-
-        <form id="add-note-form" class="form-stack" novalidate>
-          <label class="field">
-            <span class="field__label">หัวข้อ *</span>
-            <input
-              id="add-title"
-              name="title"
-              type="text"
-              maxlength="160"
-              placeholder="เช่น ติดตามลูกค้าร้าน A / ตรวจหน้างานไซต์ B"
-              required
-            >
-          </label>
-
-          <label class="field">
-            <span class="field__label">รายละเอียด *</span>
-            <textarea
-              id="add-description"
-              name="description"
-              rows="6"
-              maxlength="5000"
-              placeholder="บันทึกรายละเอียดที่ต้องทำ / สิ่งที่พบ / สิ่งที่ต้องติดตามต่อ"
-              required
-            ></textarea>
-          </label>
-
-          <div class="field">
-            <span class="field__label">รูปภาพ (ไม่บังคับ)</span>
-            <input id="add-image-input" type="file" accept="image/*" class="hidden-input">
-            <div class="inline-row">
-              <button type="button" class="btn btn--secondary btn--sm" id="btn-add-pick-image">เลือกรูป</button>
-              <button type="button" class="btn btn--danger-soft btn--sm" id="btn-add-remove-image" disabled>ลบรูป</button>
-            </div>
-            <p class="field__hint">ระบบจะบีบอัดรูปอัตโนมัติ (max 1280px, JPEG q=0.78) ก่อนส่ง API</p>
-          </div>
-
-          <div class="image-preview-card" id="add-image-preview-card" data-empty="true">
-            <div class="image-preview-card__frame">
-              <img id="add-image-preview" alt="ตัวอย่างรูปก่อนบันทึก" hidden>
-              <div id="add-image-placeholder" class="image-placeholder">
-                ยังไม่ได้เลือกรูป
-              </div>
-            </div>
-            <div class="image-preview-card__meta">
-              <p id="add-image-meta">รองรับไฟล์ภาพจากมือถือ/คอมพิวเตอร์</p>
-            </div>
-          </div>
-
-          <div class="form-actions">
-            <button type="submit" class="btn btn--primary btn--block" id="btn-add-submit">
-              บันทึก NOTE
-            </button>
-          </div>
-        </form>
       </section>
 
       <section class="panel panel--pending">
@@ -139,6 +88,82 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <div id="add-page-backdrop" class="overlay hidden" aria-hidden="true"></div>
+  <div id="add-page-shell" class="modal-shell hidden" aria-hidden="true">
+    <section class="modal-card modal-card--lg add-page-card" role="dialog" aria-modal="true" aria-labelledby="add-page-heading">
+      <div class="modal-card__header">
+        <div>
+          <h2 id="add-page-heading">Add Note</h2>
+          <p>เพิ่ม NOTE ใหม่ แล้วบันทึกเพื่อกลับหน้าก่อนหน้า</p>
+        </div>
+        <button type="button" class="icon-btn" id="btn-close-add-page" aria-label="ปิดหน้า Add Note">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+
+      <div class="modal-card__body">
+        <section class="panel panel--add-embedded">
+          <form id="add-note-form" class="form-stack" novalidate>
+            <label class="field">
+              <span class="field__label">หัวข้อ *</span>
+              <input
+                id="add-title"
+                name="title"
+                type="text"
+                maxlength="160"
+                placeholder="เช่น ติดตามลูกค้าร้าน A / ตรวจหน้างานไซต์ B"
+                required
+              >
+            </label>
+
+            <label class="field">
+              <span class="field__label">รายละเอียด *</span>
+              <textarea
+                id="add-description"
+                name="description"
+                rows="6"
+                maxlength="5000"
+                placeholder="บันทึกรายละเอียดที่ต้องทำ / สิ่งที่พบ / สิ่งที่ต้องติดตามต่อ"
+                required
+              ></textarea>
+            </label>
+
+            <div class="field">
+              <span class="field__label">รูปภาพ (ไม่บังคับ)</span>
+              <input id="add-image-input" type="file" accept="image/*" class="hidden-input">
+              <div class="inline-row">
+                <button type="button" class="btn btn--secondary btn--sm" id="btn-add-pick-image">เลือกรูป</button>
+                <button type="button" class="btn btn--danger-soft btn--sm" id="btn-add-remove-image" disabled>ลบรูป</button>
+              </div>
+              <p class="field__hint">ระบบจะบีบอัดรูปอัตโนมัติ (max 1280px, JPEG q=0.78) ก่อนส่ง API</p>
+            </div>
+
+            <div class="image-preview-card" id="add-image-preview-card" data-empty="true">
+              <div class="image-preview-card__frame">
+                <img id="add-image-preview" alt="ตัวอย่างรูปก่อนบันทึก" hidden>
+                <div id="add-image-placeholder" class="image-placeholder">
+                  ยังไม่ได้เลือกรูป
+                </div>
+              </div>
+              <div class="image-preview-card__meta">
+                <p id="add-image-meta">รองรับไฟล์ภาพจากมือถือ/คอมพิวเตอร์</p>
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" class="btn btn--primary btn--block" id="btn-add-submit">
+                บันทึก NOTE
+              </button>
+              <button type="button" class="btn btn--ghost btn--block" id="btn-add-cancel">
+                ยกเลิก / กลับหน้าก่อนหน้า
+              </button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </section>
   </div>
 
   <div id="history-backdrop" class="overlay hidden" aria-hidden="true"></div>
