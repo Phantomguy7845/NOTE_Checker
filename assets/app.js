@@ -346,12 +346,8 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       dom.addTitle.classList.add("is-invalid");
       invalid = true;
     }
-    if (!description) {
-      dom.addDescription.classList.add("is-invalid");
-      invalid = true;
-    }
     if (invalid) {
-      showToast("error", "กรุณากรอกหัวข้อและรายละเอียดให้ครบ");
+      showToast("error", "กรุณากรอกหัวข้อ");
       return;
     }
 
@@ -956,7 +952,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
           </label>
 
           <label class="field">
-            <span class="field__label">รายละเอียด *</span>
+            <span class="field__label">รายละเอียด (ไม่บังคับ)</span>
             <textarea id="modal-edit-description" rows="6" maxlength="5000" ${busy ? "disabled" : ""}>${escapeHtml(draft.description)}</textarea>
           </label>
 
@@ -1215,13 +1211,8 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       if (titleEl) titleEl.classList.add("is-invalid");
       invalid = true;
     }
-    if (!description) {
-      if (descEl) descEl.classList.add("is-invalid");
-      invalid = true;
-    }
-
     if (invalid) {
-      showToast("error", "กรุณากรอกหัวข้อและรายละเอียดให้ครบ");
+      showToast("error", "กรุณากรอกหัวข้อ");
       return;
     }
 
