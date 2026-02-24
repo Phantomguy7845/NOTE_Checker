@@ -1,4 +1,4 @@
-const API_BASE = "https://YOUR-WORKER.workers.dev";
+const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 
 (() => {
   "use strict";
