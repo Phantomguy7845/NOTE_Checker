@@ -301,6 +301,7 @@ img {
 
 #btn-open-history {
   order: -2;
+  margin-left: auto;
 }
 
 .page-grid {
@@ -1802,6 +1803,10 @@ textarea.is-invalid {
   .topbar__actions .btn--sm {
     padding: 8px 12px;
     font-size: 0.84rem;
+  }
+
+  #btn-open-history {
+    margin-left: 0;
   }
 
   .toolbar-grid {
