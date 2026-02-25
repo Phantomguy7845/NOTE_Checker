@@ -144,7 +144,7 @@
     <div class="side-menu-panel__body">
       <div class="side-menu-panel__actions">
         <button type="button" class="btn btn--outline btn--menu-item hidden" id="btn-open-dashboard">Dashboard</button>
-        <button type="button" class="btn btn--outline btn--menu-item hidden" id="btn-open-user-mgmt">Add User</button>
+        <button type="button" class="btn btn--outline btn--menu-item hidden" id="btn-open-user-mgmt">จัดการผู้ใช้</button>
       </div>
 
       <div class="side-menu-panel__footer">
@@ -574,33 +574,109 @@
 
   <div id="user-mgmt-backdrop" class="overlay hidden" aria-hidden="true"></div>
   <div id="user-mgmt-shell" class="modal-shell hidden" aria-hidden="true">
-    <section class="modal-card modal-card--sm" role="dialog" aria-modal="true" aria-labelledby="user-mgmt-heading">
+    <section class="modal-card modal-card--lg" role="dialog" aria-modal="true" aria-labelledby="user-mgmt-heading">
       <div class="modal-card__header modal-card__header--compact">
         <div>
-          <h2 id="user-mgmt-heading">Add User</h2>
+          <h2 id="user-mgmt-heading">จัดการผู้ใช้</h2>
           <p>สำหรับผู้ใช้สิทธิ์ ADMIN</p>
         </div>
-        <button type="button" class="icon-btn" id="btn-user-mgmt-close" aria-label="ปิดหน้าต่าง Add User">
+        <button type="button" class="icon-btn" id="btn-user-mgmt-close" aria-label="ปิดหน้าต่างจัดการผู้ใช้">
           <span aria-hidden="true">&times;</span>
         </button>
       </div>
       <div class="modal-card__body">
-        <form id="user-mgmt-form" class="form-stack" novalidate>
+        <div class="user-mgmt-grid">
+          <section class="panel panel--dashboard-sub">
+            <div class="panel__header">
+              <h3>เพิ่มผู้ใช้ใหม่</h3>
+              <p>สร้างบัญชีใหม่ในระบบ</p>
+            </div>
+            <form id="user-mgmt-form" class="form-stack" novalidate>
+              <label class="field">
+                <span class="field__label">Username *</span>
+                <input id="user-mgmt-username" type="text" autocomplete="off" required>
+              </label>
+              <label class="field">
+                <span class="field__label">Password *</span>
+                <input id="user-mgmt-password" type="password" autocomplete="new-password" required>
+              </label>
+              <label class="field">
+                <span class="field__label">Display Name *</span>
+                <input id="user-mgmt-display-name" type="text" required>
+              </label>
+              <label class="field">
+                <span class="field__label">Role</span>
+                <select id="user-mgmt-role">
+                  <option value="USER">USER</option>
+                  <option value="SUPERVISOR">SUPERVISOR</option>
+                  <option value="ADMIN">ADMIN</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="field__label">สถานะ</span>
+                <select id="user-mgmt-is-active">
+                  <option value="true">Active</option>
+                  <option value="false">Inactive</option>
+                </select>
+              </label>
+              <p id="user-mgmt-error" class="auth-login-error hidden" role="alert"></p>
+            </form>
+          </section>
+
+          <section class="panel panel--dashboard-sub panel--dashboard-sub-wide">
+            <div class="panel__header panel__header--split">
+              <div>
+                <h3>รายการผู้ใช้</h3>
+                <p>ค้นหา แล้วกด “ตั้งค่า” เพื่อจัดการ role / สถานะ / ลบบัญชี</p>
+              </div>
+              <div class="panel__meta">
+                <span class="badge badge--subtle" id="user-mgmt-users-count">0 คน</span>
+              </div>
+            </div>
+            <div class="toolbar-grid toolbar-grid--sidebar">
+              <label class="field field--compact">
+                <span class="field__label">ค้นหาผู้ใช้</span>
+                <input id="user-mgmt-search" type="search" placeholder="ค้นหา username / display name">
+              </label>
+            </div>
+            <div class="list-wrap list-wrap--sidebar">
+              <ul id="user-mgmt-users-list" class="note-list" aria-live="polite"></ul>
+            </div>
+          </section>
+        </div>
+      </div>
+      <div class="modal-card__footer">
+        <button type="button" class="btn btn--ghost" id="btn-user-mgmt-cancel">ปิด</button>
+        <button type="button" class="btn btn--primary" id="btn-user-mgmt-submit">สร้างผู้ใช้</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="user-setting-backdrop" class="overlay hidden" aria-hidden="true"></div>
+  <div id="user-setting-shell" class="modal-shell hidden" aria-hidden="true">
+    <section class="modal-card modal-card--sm" role="dialog" aria-modal="true" aria-labelledby="user-setting-heading">
+      <div class="modal-card__header modal-card__header--compact">
+        <div>
+          <h2 id="user-setting-heading">ตั้งค่าผู้ใช้</h2>
+          <p id="user-setting-subheading">-</p>
+        </div>
+        <button type="button" class="icon-btn" id="btn-user-setting-close" aria-label="ปิดหน้าต่างตั้งค่าผู้ใช้">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-card__body">
+        <form id="user-setting-form" class="form-stack" novalidate>
           <label class="field">
-            <span class="field__label">Username *</span>
-            <input id="user-mgmt-username" type="text" autocomplete="off" required>
+            <span class="field__label">Username</span>
+            <input id="user-setting-username" type="text" readonly>
           </label>
           <label class="field">
-            <span class="field__label">Password *</span>
-            <input id="user-mgmt-password" type="password" autocomplete="new-password" required>
-          </label>
-          <label class="field">
-            <span class="field__label">Display Name *</span>
-            <input id="user-mgmt-display-name" type="text" required>
+            <span class="field__label">Display Name</span>
+            <input id="user-setting-display-name" type="text">
           </label>
           <label class="field">
             <span class="field__label">Role</span>
-            <select id="user-mgmt-role">
+            <select id="user-setting-role">
               <option value="USER">USER</option>
               <option value="SUPERVISOR">SUPERVISOR</option>
               <option value="ADMIN">ADMIN</option>
@@ -608,17 +684,41 @@
           </label>
           <label class="field">
             <span class="field__label">สถานะ</span>
-            <select id="user-mgmt-is-active">
+            <select id="user-setting-is-active">
               <option value="true">Active</option>
               <option value="false">Inactive</option>
             </select>
           </label>
-          <p id="user-mgmt-error" class="auth-login-error hidden" role="alert"></p>
+          <p id="user-setting-error" class="auth-login-error hidden" role="alert"></p>
         </form>
       </div>
       <div class="modal-card__footer">
-        <button type="button" class="btn btn--ghost" id="btn-user-mgmt-cancel">ยกเลิก</button>
-        <button type="button" class="btn btn--primary" id="btn-user-mgmt-submit">สร้างผู้ใช้</button>
+        <button type="button" class="btn btn--danger-soft" id="btn-user-setting-delete">ลบบัญชีผู้ใช้</button>
+        <button type="button" class="btn btn--ghost" id="btn-user-setting-cancel">ยกเลิก</button>
+        <button type="button" class="btn btn--primary" id="btn-user-setting-save">บันทึก</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="user-delete-backdrop" class="overlay hidden" aria-hidden="true"></div>
+  <div id="user-delete-shell" class="modal-shell modal-shell--confirm hidden" aria-hidden="true">
+    <section class="modal-card modal-card--sm" role="dialog" aria-modal="true" aria-labelledby="user-delete-heading">
+      <div class="modal-card__header modal-card__header--compact">
+        <div>
+          <h2 id="user-delete-heading">ยืนยันลบบัญชีผู้ใช้</h2>
+          <p>กรุณาตรวจสอบให้แน่ใจก่อนยืนยัน</p>
+        </div>
+      </div>
+      <div class="modal-card__body">
+        <p class="confirm-copy">คุณกำลังจะลบบัญชีผู้ใช้รายการนี้</p>
+        <div class="confirm-note-box">
+          <p id="user-delete-target-title" class="confirm-note-box__title">-</p>
+          <p id="user-delete-target-meta" class="confirm-note-box__meta">-</p>
+        </div>
+      </div>
+      <div class="modal-card__footer">
+        <button type="button" class="btn btn--ghost" id="btn-user-delete-cancel">ยกเลิก</button>
+        <button type="button" class="btn btn--danger-soft" id="btn-user-delete-confirm">ยืนยันลบบัญชี</button>
       </div>
     </section>
   </div>

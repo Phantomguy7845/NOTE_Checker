@@ -1621,6 +1621,17 @@ textarea.is-invalid {
   color: var(--navy);
 }
 
+.user-mgmt-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.user-mgmt-grid .list-wrap {
+  min-height: 220px;
+  max-height: 48dvh;
+  overflow-y: auto;
+}
+
 .dashboard-list {
   list-style: none;
   margin: 0;
@@ -1832,6 +1843,15 @@ textarea.is-invalid {
 
   .panel--dashboard-sub-wide {
     grid-column: 1 / -1;
+  }
+
+  .user-mgmt-grid {
+    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .user-mgmt-grid .list-wrap {
+    max-height: 56dvh;
   }
 
   .toolbar-grid--sidebar {

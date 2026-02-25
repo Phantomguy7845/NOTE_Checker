@@ -109,6 +109,18 @@ const imageInflightCache = new Map();
       open: false,
       creating: false,
       error: "",
+      search: "",
+    },
+    userSetting: {
+      open: false,
+      saving: false,
+      error: "",
+      userId: "",
+    },
+    userDeleteConfirm: {
+      open: false,
+      busy: false,
+      userId: "",
     },
     dashboard: {
       open: false,
@@ -329,9 +341,31 @@ const imageInflightCache = new Map();
     dom.userMgmtRole = document.getElementById("user-mgmt-role");
     dom.userMgmtIsActive = document.getElementById("user-mgmt-is-active");
     dom.userMgmtError = document.getElementById("user-mgmt-error");
+    dom.userMgmtSearch = document.getElementById("user-mgmt-search");
+    dom.userMgmtUsersCount = document.getElementById("user-mgmt-users-count");
+    dom.userMgmtUsersList = document.getElementById("user-mgmt-users-list");
     dom.btnUserMgmtClose = document.getElementById("btn-user-mgmt-close");
     dom.btnUserMgmtCancel = document.getElementById("btn-user-mgmt-cancel");
     dom.btnUserMgmtSubmit = document.getElementById("btn-user-mgmt-submit");
+    dom.userSettingBackdrop = document.getElementById("user-setting-backdrop");
+    dom.userSettingShell = document.getElementById("user-setting-shell");
+    dom.userSettingForm = document.getElementById("user-setting-form");
+    dom.userSettingSubheading = document.getElementById("user-setting-subheading");
+    dom.userSettingUsername = document.getElementById("user-setting-username");
+    dom.userSettingDisplayName = document.getElementById("user-setting-display-name");
+    dom.userSettingRole = document.getElementById("user-setting-role");
+    dom.userSettingIsActive = document.getElementById("user-setting-is-active");
+    dom.userSettingError = document.getElementById("user-setting-error");
+    dom.btnUserSettingClose = document.getElementById("btn-user-setting-close");
+    dom.btnUserSettingCancel = document.getElementById("btn-user-setting-cancel");
+    dom.btnUserSettingSave = document.getElementById("btn-user-setting-save");
+    dom.btnUserSettingDelete = document.getElementById("btn-user-setting-delete");
+    dom.userDeleteBackdrop = document.getElementById("user-delete-backdrop");
+    dom.userDeleteShell = document.getElementById("user-delete-shell");
+    dom.userDeleteTargetTitle = document.getElementById("user-delete-target-title");
+    dom.userDeleteTargetMeta = document.getElementById("user-delete-target-meta");
+    dom.btnUserDeleteCancel = document.getElementById("btn-user-delete-cancel");
+    dom.btnUserDeleteConfirm = document.getElementById("btn-user-delete-confirm");
 
     dom.cameraBackdrop = document.getElementById("camera-backdrop");
     dom.cameraShell = document.getElementById("camera-shell");
@@ -608,12 +642,35 @@ const imageInflightCache = new Map();
     if (dom.btnUserMgmtClose) dom.btnUserMgmtClose.addEventListener("click", () => closeUserMgmtModal());
     if (dom.btnUserMgmtCancel) dom.btnUserMgmtCancel.addEventListener("click", () => closeUserMgmtModal());
     if (dom.btnUserMgmtSubmit) dom.btnUserMgmtSubmit.addEventListener("click", () => void submitCreateUser());
+    if (dom.userMgmtSearch) {
+      dom.userMgmtSearch.addEventListener("input", (event) => {
+        state.userMgmt.search = String(event.target.value || "");
+        renderUserMgmtUsersList();
+      });
+    }
+    if (dom.userMgmtUsersList) {
+      dom.userMgmtUsersList.addEventListener("click", handleUserMgmtListClick);
+    }
     if (dom.userMgmtForm) {
       dom.userMgmtForm.addEventListener("submit", (event) => {
         event.preventDefault();
         void submitCreateUser();
       });
     }
+    if (dom.userSettingBackdrop) dom.userSettingBackdrop.addEventListener("click", () => closeUserSettingModal());
+    if (dom.btnUserSettingClose) dom.btnUserSettingClose.addEventListener("click", () => closeUserSettingModal());
+    if (dom.btnUserSettingCancel) dom.btnUserSettingCancel.addEventListener("click", () => closeUserSettingModal());
+    if (dom.btnUserSettingSave) dom.btnUserSettingSave.addEventListener("click", () => void submitUserSettingSave());
+    if (dom.btnUserSettingDelete) dom.btnUserSettingDelete.addEventListener("click", () => openUserDeleteConfirmModal());
+    if (dom.userSettingForm) {
+      dom.userSettingForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        void submitUserSettingSave();
+      });
+    }
+    if (dom.userDeleteBackdrop) dom.userDeleteBackdrop.addEventListener("click", () => closeUserDeleteConfirmModal());
+    if (dom.btnUserDeleteCancel) dom.btnUserDeleteCancel.addEventListener("click", () => closeUserDeleteConfirmModal());
+    if (dom.btnUserDeleteConfirm) dom.btnUserDeleteConfirm.addEventListener("click", () => void submitUserDeleteConfirm());
 
     document.addEventListener("keydown", handleGlobalKeydown);
     window.addEventListener("scroll", updateTopbarScrollState, { passive: true });
@@ -1016,6 +1073,8 @@ const imageInflightCache = new Map();
     } finally {
       userFilterRenderUserOptions();
       renderAddVisibleUsersControl();
+      renderUserMgmtUsersList();
+      renderUserSettingModalState();
       dashboardRenderControls();
       if (state.dashboard.open) {
         void refreshDashboardSummary({ silent: true });
@@ -1176,6 +1235,12 @@ const imageInflightCache = new Map();
     if (dom.authPassword) dom.authPassword.value = "";
     if (state.userMgmt.open) {
       closeUserMgmtModal({ force: true });
+    }
+    if (state.userSetting.open) {
+      closeUserSettingModal({ force: true });
+    }
+    if (state.userDeleteConfirm.open) {
+      closeUserDeleteConfirmModal({ force: true });
     }
     if (state.sideMenu.open) {
       closeSideMenu();
@@ -4649,6 +4714,336 @@ const imageInflightCache = new Map();
   }
 
   // === AUTH PATCH START ===
+  function userMgmtGetSortedUsers() {
+    const users = Array.isArray(state.auth.users) ? state.auth.users.slice() : [];
+    return users.sort((a, b) => {
+      const roleA = String((a && a.role) || "USER");
+      const roleB = String((b && b.role) || "USER");
+      const roleOrder = { ADMIN: 0, SUPERVISOR: 1, USER: 2 };
+      const roleDiff = (roleOrder[roleA] ?? 99) - (roleOrder[roleB] ?? 99);
+      if (roleDiff) return roleDiff;
+      return String((a && (a.displayName || a.username || a.userId)) || "").localeCompare(
+        String((b && (b.displayName || b.username || b.userId)) || ""),
+        "th"
+      );
+    });
+  }
+
+  function userMgmtGetFilteredUsers() {
+    const q = String(state.userMgmt.search || "").trim().toLowerCase();
+    const users = userMgmtGetSortedUsers();
+    if (!q) return users;
+    return users.filter((user) => {
+      const txt = `${user.displayName || ""} ${user.username || ""} ${user.userId || ""} ${user.role || ""}`.toLowerCase();
+      return txt.includes(q);
+    });
+  }
+
+  function renderUserMgmtUsersList() {
+    if (!dom.userMgmtUsersList || !dom.userMgmtUsersCount) return;
+
+    const items = userMgmtGetFilteredUsers();
+    const total = Array.isArray(state.auth.users) ? state.auth.users.length : 0;
+    dom.userMgmtUsersCount.textContent = `${items.length} / ${total} คน`;
+
+    if (!authIsAdmin()) {
+      dom.userMgmtUsersList.innerHTML = '<li class="list-message">เฉพาะ ADMIN เท่านั้น</li>';
+      return;
+    }
+
+    if (!items.length) {
+      dom.userMgmtUsersList.innerHTML =
+        '<li class="list-message">ไม่พบผู้ใช้ที่ตรงกับคำค้นหา</li>';
+      return;
+    }
+
+    dom.userMgmtUsersList.innerHTML = items
+      .map((user) => {
+        const displayName = String(user.displayName || user.username || user.userId || "-");
+        const username = String(user.username || "-");
+        const role = String(user.role || "USER").toUpperCase();
+        const isActive = user.isActive !== false;
+        const isSelf = String(user.userId || "") === getCurrentUserId();
+        return `
+          <li class="note-card">
+            <div>
+              <div class="note-card__header">
+                <h3 class="note-card__title">${escapeHtml(displayName)}${isSelf ? ' <span class="sr-only">(บัญชีปัจจุบัน)</span>' : ""}</h3>
+                <span class="chip ${isActive ? "chip--done" : "chip--warn"}">${escapeHtml(isActive ? "ACTIVE" : "INACTIVE")}</span>
+              </div>
+              <p class="note-card__desc">@${escapeHtml(username)}</p>
+              <div class="note-card__meta">
+                <span class="note-card__meta-item">Role: ${escapeHtml(role)}</span>
+                ${isSelf ? '<span class="note-card__meta-item">บัญชีที่กำลังใช้งาน</span>' : ""}
+              </div>
+            </div>
+            <div class="note-card__actions">
+              <button type="button" class="btn btn--outline btn--sm" data-action="user-mgmt-open-setting" data-user-id="${escapeAttribute(String(user.userId || ""))}">ตั้งค่า</button>
+            </div>
+          </li>
+        `;
+      })
+      .join("");
+  }
+
+  function handleUserMgmtListClick(event) {
+    const button = event.target.closest("button[data-action][data-user-id]");
+    if (!button) return;
+    if (button.dataset.action !== "user-mgmt-open-setting") return;
+    const userId = String(button.dataset.userId || "");
+    if (!userId) return;
+    openUserSettingModal(userId);
+  }
+
+  function findAuthUserById(userId) {
+    const target = String(userId || "");
+    if (!target) return null;
+    const users = Array.isArray(state.auth.users) ? state.auth.users : [];
+    return users.find((u) => String((u && u.userId) || "") === target) || null;
+  }
+
+  function openUserSettingModal(userId) {
+    if (!authIsAdmin()) {
+      showToast("warn", "เฉพาะ ADMIN เท่านั้น");
+      return;
+    }
+    if (!dom.userSettingShell || !dom.userSettingBackdrop) {
+      showToast("warn", "User Setting UI ไม่พร้อมใช้งาน");
+      return;
+    }
+
+    const user = findAuthUserById(userId);
+    if (!user) {
+      showToast("error", "ไม่พบข้อมูลผู้ใช้");
+      return;
+    }
+
+    state.userSetting.open = true;
+    state.userSetting.saving = false;
+    state.userSetting.error = "";
+    state.userSetting.userId = String(user.userId || "");
+    renderUserSettingModalState();
+
+    showModalElements(dom.userSettingBackdrop, dom.userSettingShell);
+    dom.userSettingShell.setAttribute("aria-hidden", "false");
+    dom.userSettingBackdrop.setAttribute("aria-hidden", "false");
+    syncBodyScrollLock();
+  }
+
+  function closeUserSettingModal(options = {}) {
+    if (!state.userSetting.open) return;
+    if (!options.force && state.userSetting.saving) return;
+
+    state.userSetting.open = false;
+    state.userSetting.saving = false;
+    state.userSetting.error = "";
+    state.userSetting.userId = "";
+    renderUserSettingModalState();
+
+    if (dom.userSettingShell && dom.userSettingBackdrop) {
+      hideModalElements(dom.userSettingBackdrop, dom.userSettingShell);
+      dom.userSettingShell.setAttribute("aria-hidden", "true");
+      dom.userSettingBackdrop.setAttribute("aria-hidden", "true");
+    }
+    syncBodyScrollLock();
+  }
+
+  function renderUserSettingModalState() {
+    if (!dom.userSettingShell) return;
+
+    const user = findAuthUserById(state.userSetting.userId);
+    const busy = Boolean(state.userSetting.saving);
+    const isSelf = user ? String(user.userId || "") === getCurrentUserId() : false;
+
+    if (dom.userSettingSubheading) {
+      dom.userSettingSubheading.textContent = user
+        ? `@${user.username || "-"} • ${user.displayName || user.userId || "-"}`
+        : "-";
+    }
+    if (dom.userSettingUsername) dom.userSettingUsername.value = user ? String(user.username || "") : "";
+    if (dom.userSettingDisplayName) {
+      dom.userSettingDisplayName.value = user ? String(user.displayName || "") : "";
+      dom.userSettingDisplayName.disabled = busy || !user;
+    }
+    if (dom.userSettingRole) {
+      dom.userSettingRole.value = user ? String(user.role || "USER").toUpperCase() : "USER";
+      dom.userSettingRole.disabled = busy || !user;
+    }
+    if (dom.userSettingIsActive) {
+      dom.userSettingIsActive.value = user && user.isActive === false ? "false" : "true";
+      dom.userSettingIsActive.disabled = busy || !user;
+    }
+    if (dom.btnUserSettingClose) dom.btnUserSettingClose.disabled = busy;
+    if (dom.btnUserSettingCancel) dom.btnUserSettingCancel.disabled = busy;
+    if (dom.btnUserSettingSave) {
+      dom.btnUserSettingSave.disabled = busy || !user;
+      if (!dom.btnUserSettingSave.dataset.defaultLabel) {
+        dom.btnUserSettingSave.dataset.defaultLabel = dom.btnUserSettingSave.textContent || "บันทึก";
+      }
+      dom.btnUserSettingSave.textContent = busy ? "กำลังบันทึก..." : dom.btnUserSettingSave.dataset.defaultLabel;
+    }
+    if (dom.btnUserSettingDelete) {
+      dom.btnUserSettingDelete.disabled = busy || !user || isSelf;
+      dom.btnUserSettingDelete.title = isSelf ? "ไม่สามารถลบบัญชีที่กำลังใช้งานอยู่" : "";
+    }
+    if (dom.userSettingError) {
+      const message = String(state.userSetting.error || "");
+      dom.userSettingError.textContent = message;
+      dom.userSettingError.classList.toggle("hidden", !message);
+    }
+  }
+
+  async function submitUserSettingSave() {
+    if (!state.userSetting.open || state.userSetting.saving) return;
+    if (!authIsAdmin()) {
+      showToast("warn", "เฉพาะ ADMIN เท่านั้น");
+      return;
+    }
+
+    const userId = String(state.userSetting.userId || "");
+    const user = findAuthUserById(userId);
+    if (!user) {
+      state.userSetting.error = "ไม่พบผู้ใช้";
+      renderUserSettingModalState();
+      return;
+    }
+
+    const displayName = String((dom.userSettingDisplayName && dom.userSettingDisplayName.value) || "").trim();
+    const rawRole = String((dom.userSettingRole && dom.userSettingRole.value) || "USER").trim().toUpperCase();
+    const role = rawRole === "ADMIN" || rawRole === "SUPERVISOR" ? rawRole : "USER";
+    const isActive = String((dom.userSettingIsActive && dom.userSettingIsActive.value) || "true") !== "false";
+
+    if (!displayName) {
+      state.userSetting.error = "displayName ห้ามว่าง";
+      renderUserSettingModalState();
+      return;
+    }
+
+    state.userSetting.saving = true;
+    state.userSetting.error = "";
+    renderUserSettingModalState();
+
+    try {
+      await apiPost("updateUser", { userId, displayName, role, isActive });
+      showToast("success", "บันทึกการตั้งค่าผู้ใช้แล้ว");
+      await authLoadUsers();
+      closeUserSettingModal({ force: true });
+    } catch (error) {
+      state.userSetting.saving = false;
+      state.userSetting.error = getErrorMessage(error);
+      renderUserSettingModalState();
+    }
+  }
+
+  function openUserDeleteConfirmModal() {
+    if (!state.userSetting.open || !state.userSetting.userId) return;
+    const user = findAuthUserById(state.userSetting.userId);
+    if (!user) {
+      showToast("error", "ไม่พบข้อมูลผู้ใช้");
+      return;
+    }
+    if (String(user.userId || "") === getCurrentUserId()) {
+      showToast("warn", "ไม่สามารถลบบัญชีที่กำลังใช้งานอยู่");
+      return;
+    }
+
+    state.userDeleteConfirm.open = true;
+    state.userDeleteConfirm.busy = false;
+    state.userDeleteConfirm.userId = String(user.userId || "");
+    renderUserDeleteConfirmState();
+
+    if (dom.userDeleteShell && dom.userDeleteBackdrop) {
+      showModalElements(dom.userDeleteBackdrop, dom.userDeleteShell);
+      dom.userDeleteShell.setAttribute("aria-hidden", "false");
+      dom.userDeleteBackdrop.setAttribute("aria-hidden", "false");
+    }
+    syncBodyScrollLock();
+  }
+
+  function closeUserDeleteConfirmModal(options = {}) {
+    if (!state.userDeleteConfirm.open) return;
+    if (!options.force && state.userDeleteConfirm.busy) return;
+
+    state.userDeleteConfirm.open = false;
+    state.userDeleteConfirm.busy = false;
+    state.userDeleteConfirm.userId = "";
+    renderUserDeleteConfirmState();
+
+    if (dom.userDeleteShell && dom.userDeleteBackdrop) {
+      hideModalElements(dom.userDeleteBackdrop, dom.userDeleteShell);
+      dom.userDeleteShell.setAttribute("aria-hidden", "true");
+      dom.userDeleteBackdrop.setAttribute("aria-hidden", "true");
+    }
+    syncBodyScrollLock();
+  }
+
+  function renderUserDeleteConfirmState() {
+    const user = findAuthUserById(state.userDeleteConfirm.userId);
+    if (dom.userDeleteTargetTitle) {
+      dom.userDeleteTargetTitle.textContent = user
+        ? (user.displayName || user.username || user.userId || "-")
+        : "-";
+    }
+    if (dom.userDeleteTargetMeta) {
+      dom.userDeleteTargetMeta.textContent = user
+        ? `@${user.username || "-"} • ${String(user.role || "USER").toUpperCase()}`
+        : "-";
+    }
+    if (dom.btnUserDeleteCancel) dom.btnUserDeleteCancel.disabled = state.userDeleteConfirm.busy;
+    if (dom.btnUserDeleteConfirm) {
+      dom.btnUserDeleteConfirm.disabled = state.userDeleteConfirm.busy;
+      if (!dom.btnUserDeleteConfirm.dataset.defaultLabel) {
+        dom.btnUserDeleteConfirm.dataset.defaultLabel = dom.btnUserDeleteConfirm.textContent || "ยืนยันลบบัญชี";
+      }
+      dom.btnUserDeleteConfirm.textContent = state.userDeleteConfirm.busy
+        ? "กำลังลบ..."
+        : (dom.btnUserDeleteConfirm.dataset.defaultLabel || "ยืนยันลบบัญชี");
+    }
+  }
+
+  async function submitUserDeleteConfirm() {
+    if (!state.userDeleteConfirm.open || state.userDeleteConfirm.busy) return;
+    if (!authIsAdmin()) {
+      showToast("warn", "เฉพาะ ADMIN เท่านั้น");
+      return;
+    }
+
+    const userId = String(state.userDeleteConfirm.userId || "");
+    if (!userId) return;
+
+    state.userDeleteConfirm.busy = true;
+    state.userSetting.saving = true;
+    renderUserDeleteConfirmState();
+    renderUserSettingModalState();
+
+    try {
+      let deletedByEndpoint = false;
+      try {
+        await apiPost("deleteUser", { userId });
+        deletedByEndpoint = true;
+      } catch (error) {
+        const message = getErrorMessage(error);
+        if (/unknown.*deleteuser|not found|unknown post action/i.test(message)) {
+          await apiPost("updateUser", { userId, isActive: false });
+          showToast("warn", "Backend ยังไม่รองรับ deleteUser จึงปิดใช้งานบัญชีแทน");
+        } else {
+          throw error;
+        }
+      }
+
+      closeUserDeleteConfirmModal({ force: true });
+      closeUserSettingModal({ force: true });
+      await authLoadUsers();
+      showToast("success", deletedByEndpoint ? "ลบบัญชีผู้ใช้แล้ว" : "ปิดใช้งานบัญชีผู้ใช้แล้ว");
+    } catch (error) {
+      state.userDeleteConfirm.busy = false;
+      state.userSetting.saving = false;
+      renderUserDeleteConfirmState();
+      state.userSetting.error = getErrorMessage(error);
+      renderUserSettingModalState();
+    }
+  }
+
   function openUserMgmtModal() {
     if (!authIsAdmin()) {
       showToast("warn", "เฉพาะ ADMIN เท่านั้น");
@@ -4662,6 +5057,7 @@ const imageInflightCache = new Map();
     state.userMgmt.open = true;
     state.userMgmt.creating = false;
     state.userMgmt.error = "";
+    renderUserMgmtUsersList();
     renderUserMgmtModalState();
     showModalElements(dom.userMgmtBackdrop, dom.userMgmtShell);
     dom.userMgmtShell.setAttribute("aria-hidden", "false");
@@ -4671,6 +5067,7 @@ const imageInflightCache = new Map();
     window.setTimeout(() => {
       if (state.userMgmt.open && dom.userMgmtUsername) dom.userMgmtUsername.focus();
     }, CONFIG.modalTransitionMs);
+    void authLoadUsers();
   }
 
   function closeUserMgmtModal(options = {}) {
@@ -4680,6 +5077,10 @@ const imageInflightCache = new Map();
     state.userMgmt.open = false;
     state.userMgmt.creating = false;
     state.userMgmt.error = "";
+    state.userMgmt.search = "";
+    if (dom.userMgmtSearch) dom.userMgmtSearch.value = "";
+    if (state.userSetting.open) closeUserSettingModal({ force: true });
+    if (state.userDeleteConfirm.open) closeUserDeleteConfirmModal({ force: true });
     renderUserMgmtModalState();
     hideModalElements(dom.userMgmtBackdrop, dom.userMgmtShell);
     dom.userMgmtShell.setAttribute("aria-hidden", "true");
@@ -4713,6 +5114,8 @@ const imageInflightCache = new Map();
       dom.userMgmtError.textContent = message;
       dom.userMgmtError.classList.toggle("hidden", !message);
     }
+
+    renderUserMgmtUsersList();
   }
 
   async function submitCreateUser() {
@@ -4745,8 +5148,10 @@ const imageInflightCache = new Map();
       if (dom.userMgmtForm) dom.userMgmtForm.reset();
       if (dom.userMgmtRole) dom.userMgmtRole.value = "USER";
       if (dom.userMgmtIsActive) dom.userMgmtIsActive.value = "true";
-      closeUserMgmtModal({ force: true });
+      state.userMgmt.creating = false;
+      renderUserMgmtModalState();
       await authLoadUsers();
+      if (dom.userMgmtUsername) dom.userMgmtUsername.focus();
     } catch (error) {
       const message = getErrorMessage(error);
       state.userMgmt.creating = false;
@@ -4818,6 +5223,14 @@ const imageInflightCache = new Map();
       closeUserMgmtModal();
       return;
     }
+    if (state.userDeleteConfirm.open) {
+      closeUserDeleteConfirmModal();
+      return;
+    }
+    if (state.userSetting.open) {
+      closeUserSettingModal();
+      return;
+    }
     if (state.sideMenu.open) {
       closeSideMenu();
       return;
@@ -4852,6 +5265,8 @@ const imageInflightCache = new Map();
       state.addPage.open ||
       state.camera.open ||
       state.userMgmt.open ||
+      state.userSetting.open ||
+      state.userDeleteConfirm.open ||
       state.dashboard.open ||
       state.auth.loginOpen;
     dom.body.classList.toggle("no-scroll", shouldLock);
