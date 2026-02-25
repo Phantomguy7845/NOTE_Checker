@@ -74,6 +74,9 @@ const imageInflightCache = new Map();
     addPage: {
       open: false,
     },
+    sideMenu: {
+      open: false,
+    },
     sidebar: {
       open: false,
       historyFiltersCollapsed: true,
@@ -206,6 +209,10 @@ const imageInflightCache = new Map();
     dom.syncStatusText = document.getElementById("sync-status-text");
     dom.btnRefreshAll = document.getElementById("btn-refresh-all");
     dom.btnRetrySync = document.getElementById("btn-retry-sync");
+    dom.sideMenuBackdrop = document.getElementById("side-menu-backdrop");
+    dom.sideMenuPanel = document.getElementById("side-menu-panel");
+    dom.btnOpenSideMenu = document.getElementById("btn-open-side-menu");
+    dom.btnCloseSideMenu = document.getElementById("btn-close-side-menu");
     dom.btnOpenDashboard = document.getElementById("btn-open-dashboard");
     dom.btnOpenUserMgmt = document.getElementById("btn-open-user-mgmt");
     dom.btnAuthLogout = document.getElementById("btn-auth-logout");
@@ -349,8 +356,20 @@ const imageInflightCache = new Map();
     dom.btnRetrySync.addEventListener("click", () => {
       void processSyncQueue({ manual: true, reason: "manual-retry" });
     });
+    if (dom.btnOpenSideMenu) {
+      dom.btnOpenSideMenu.addEventListener("click", openSideMenu);
+    }
+    if (dom.btnCloseSideMenu) {
+      dom.btnCloseSideMenu.addEventListener("click", closeSideMenu);
+    }
+    if (dom.sideMenuBackdrop) {
+      dom.sideMenuBackdrop.addEventListener("click", closeSideMenu);
+    }
     if (dom.btnOpenDashboard) {
-      dom.btnOpenDashboard.addEventListener("click", () => void openDashboardModal());
+      dom.btnOpenDashboard.addEventListener("click", () => {
+        closeSideMenu();
+        void openDashboardModal();
+      });
     }
     if (dom.authLoginForm) {
       dom.authLoginForm.addEventListener("submit", (event) => {
@@ -359,11 +378,15 @@ const imageInflightCache = new Map();
     }
     if (dom.btnAuthLogout) {
       dom.btnAuthLogout.addEventListener("click", () => {
+        closeSideMenu();
         void authLogout({ source: "manual" });
       });
     }
     if (dom.btnOpenUserMgmt) {
-      dom.btnOpenUserMgmt.addEventListener("click", openUserMgmtModal);
+      dom.btnOpenUserMgmt.addEventListener("click", () => {
+        closeSideMenu();
+        openUserMgmtModal();
+      });
     }
     dom.btnOpenAddPage.addEventListener("click", openAddPage);
     dom.btnOpenHistory.addEventListener("click", openHistoryPanel);
@@ -684,6 +707,10 @@ const imageInflightCache = new Map();
     if (dom.btnOpenDashboard) {
       dom.btnOpenDashboard.classList.toggle("hidden", !loggedIn);
       dom.btnOpenDashboard.disabled = !loggedIn;
+    }
+    if (dom.btnOpenSideMenu) {
+      dom.btnOpenSideMenu.classList.toggle("hidden", !loggedIn);
+      dom.btnOpenSideMenu.disabled = !loggedIn;
     }
   }
 
@@ -1116,6 +1143,9 @@ const imageInflightCache = new Map();
     if (dom.authPassword) dom.authPassword.value = "";
     if (state.userMgmt.open) {
       closeUserMgmtModal({ force: true });
+    }
+    if (state.sideMenu.open) {
+      closeSideMenu();
     }
     if (state.dashboard.open) {
       closeDashboardModal();
@@ -3455,6 +3485,31 @@ const imageInflightCache = new Map();
     }).join("");
   }
 
+  function openSideMenu() {
+    if (!dom.sideMenuPanel || !dom.sideMenuBackdrop) return;
+    if (!authIsLoggedIn()) return;
+    if (state.sideMenu.open) return;
+
+    state.sideMenu.open = true;
+    if (dom.btnOpenSideMenu) dom.btnOpenSideMenu.setAttribute("aria-expanded", "true");
+    dom.sideMenuPanel.setAttribute("aria-hidden", "false");
+    dom.sideMenuBackdrop.setAttribute("aria-hidden", "false");
+    showModalElements(dom.sideMenuBackdrop, dom.sideMenuPanel);
+    syncBodyScrollLock();
+  }
+
+  function closeSideMenu() {
+    if (!dom.sideMenuPanel || !dom.sideMenuBackdrop) return;
+    if (!state.sideMenu.open) return;
+
+    state.sideMenu.open = false;
+    if (dom.btnOpenSideMenu) dom.btnOpenSideMenu.setAttribute("aria-expanded", "false");
+    dom.sideMenuPanel.setAttribute("aria-hidden", "true");
+    dom.sideMenuBackdrop.setAttribute("aria-hidden", "true");
+    hideModalElements(dom.sideMenuBackdrop, dom.sideMenuPanel);
+    syncBodyScrollLock();
+  }
+
   function openHistoryPanel() {
     if (state.sidebar.open) return;
     state.sidebar.open = true;
@@ -4496,6 +4551,10 @@ const imageInflightCache = new Map();
       closeUserMgmtModal();
       return;
     }
+    if (state.sideMenu.open) {
+      closeSideMenu();
+      return;
+    }
     if (state.dashboard.open) {
       closeDashboardModal();
       return;
@@ -4520,6 +4579,7 @@ const imageInflightCache = new Map();
   function syncBodyScrollLock() {
     const shouldLock =
       state.sidebar.open ||
+      state.sideMenu.open ||
       state.noteModal.open ||
       state.confirm.open ||
       state.addPage.open ||

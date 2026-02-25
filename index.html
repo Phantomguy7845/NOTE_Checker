@@ -37,10 +37,8 @@
 
       <div class="topbar__actions">
         <button type="button" class="btn btn--ghost btn--sm hidden" id="btn-retry-sync">ส่งคิวอีกครั้ง</button>
-        <button type="button" class="btn btn--ghost btn--sm hidden" id="btn-open-dashboard">Dashboard</button>
-        <button type="button" class="btn btn--ghost btn--sm hidden" id="btn-open-user-mgmt">Add User</button>
+        <button type="button" class="btn btn--ghost btn--sm hidden" id="btn-open-side-menu" aria-controls="side-menu-panel" aria-expanded="false">เมนู</button>
         <button type="button" class="btn btn--ghost btn--sm" id="btn-refresh-all">รีเฟรช</button>
-        <button type="button" class="btn btn--ghost btn--sm hidden" id="btn-auth-logout">ออกจากระบบ</button>
         <button
           type="button"
           class="btn btn--primary btn--sm"
@@ -130,6 +128,30 @@
       </section>
     </main>
   </div>
+
+  <div id="side-menu-backdrop" class="overlay hidden" aria-hidden="true"></div>
+  <aside id="side-menu-panel" class="side-menu-panel" aria-hidden="true" aria-labelledby="side-menu-title">
+    <div class="side-menu-panel__header">
+      <div>
+        <h2 id="side-menu-title">เมนู</h2>
+        <p>ทางลัดการจัดการระบบ</p>
+      </div>
+      <button type="button" class="icon-btn" id="btn-close-side-menu" aria-label="ปิดเมนู">
+        <span aria-hidden="true">&times;</span>
+      </button>
+    </div>
+
+    <div class="side-menu-panel__body">
+      <div class="side-menu-panel__actions">
+        <button type="button" class="btn btn--outline btn--menu-item hidden" id="btn-open-dashboard">Dashboard</button>
+        <button type="button" class="btn btn--outline btn--menu-item hidden" id="btn-open-user-mgmt">Add User</button>
+      </div>
+
+      <div class="side-menu-panel__footer">
+        <button type="button" class="btn btn--danger-soft btn--menu-item hidden" id="btn-auth-logout">ออกจากระบบ</button>
+      </div>
+    </div>
+  </aside>
 
   <div id="add-page-backdrop" class="overlay hidden" aria-hidden="true"></div>
   <div id="add-page-shell" class="modal-shell hidden" aria-hidden="true">
