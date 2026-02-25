@@ -11,9 +11,14 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     overlayTransitionMs: 240,
     toastDurationMs: 3200,
     emptyDescriptionSentinel: "\u200B",
+    syncStorageKey: "note_checker_sync_queue_v1",
+    syncRetryBaseMs: 8000,
+    syncRetryMaxMs: 60000,
   };
 
   const state = {
+    rawPendingNotes: [],
+    rawDoneNotes: [],
     pendingNotes: [],
     doneNotes: [],
     loading: {
@@ -63,6 +68,11 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       noteId: "",
       busy: false,
     },
+    sync: {
+      queue: [],
+      processing: false,
+      timerId: null,
+    },
   };
 
   const dom = {};
@@ -73,7 +83,10 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
   async function init() {
     cacheDom();
     bindEvents();
+    loadSyncQueueFromStorage();
+    renderSyncHeader();
     renderAddImagePreview();
+    rebuildVisibleNotesFromSources();
     renderList("pending");
     renderList("done");
 
@@ -84,6 +97,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     }
 
     await bootstrap();
+    void processSyncQueue({ reason: "post-bootstrap" });
   }
 
   function cacheDom() {
@@ -91,7 +105,10 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 
     dom.apiStatus = document.getElementById("api-status");
     dom.apiStatusText = document.getElementById("api-status-text");
+    dom.syncStatus = document.getElementById("sync-status");
+    dom.syncStatusText = document.getElementById("sync-status-text");
     dom.btnRefreshAll = document.getElementById("btn-refresh-all");
+    dom.btnRetrySync = document.getElementById("btn-retry-sync");
     dom.btnOpenHistory = document.getElementById("btn-open-history");
     dom.btnOpenAddPage = document.getElementById("btn-open-add-page");
 
@@ -158,6 +175,9 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     }, CONFIG.searchDebounceMs);
 
     dom.btnRefreshAll.addEventListener("click", handleRefreshAll);
+    dom.btnRetrySync.addEventListener("click", () => {
+      void processSyncQueue({ manual: true, reason: "manual-retry" });
+    });
     dom.btnOpenAddPage.addEventListener("click", openAddPage);
     dom.btnOpenHistory.addEventListener("click", openHistoryPanel);
     dom.btnCloseHistory.addEventListener("click", closeHistoryPanel);
@@ -207,6 +227,9 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     dom.btnConfirmSubmit.addEventListener("click", handleConfirmSubmit);
 
     document.addEventListener("keydown", handleGlobalKeydown);
+    window.addEventListener("online", () => {
+      void processSyncQueue({ manual: true, reason: "browser-online" });
+    });
   }
 
   async function bootstrap() {
@@ -269,9 +292,10 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     try {
       const response = await apiGet("getPendingNotes");
       const notes = extractNoteArray(response).map(normalizeNote);
-      state.pendingNotes = notes
+      state.rawPendingNotes = notes
         .filter((note) => note.noteId)
         .filter((note) => normalizeStatus(note.status || "PENDING") !== "DONE");
+      rebuildVisibleNotesFromSources();
       setApiStatus("online", "API: พร้อมใช้งาน");
     } catch (error) {
       state.errors.pending = getErrorMessage(error);
@@ -290,9 +314,10 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     try {
       const response = await apiGet("getDoneNotes");
       const notes = extractNoteArray(response).map(normalizeNote);
-      state.doneNotes = notes
+      state.rawDoneNotes = notes
         .filter((note) => note.noteId)
         .map((note) => ({ ...note, status: "DONE" }));
+      rebuildVisibleNotesFromSources();
       setApiStatus("online", "API: พร้อมใช้งาน");
     } catch (error) {
       state.errors.done = getErrorMessage(error);
@@ -301,6 +326,496 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       state.loading.done = false;
       renderList("done");
     }
+  }
+
+  function loadSyncQueueFromStorage() {
+    state.sync.queue = [];
+
+    let raw = "";
+    try {
+      raw = window.localStorage.getItem(CONFIG.syncStorageKey) || "";
+    } catch (error) {
+      return;
+    }
+
+    if (!raw) return;
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return;
+
+      state.sync.queue = parsed
+        .map((item) => sanitizeSyncQueueItem(item))
+        .filter(Boolean);
+    } catch (error) {
+      console.warn("Failed to parse sync queue", error);
+    }
+  }
+
+  function saveSyncQueueToStorage() {
+    try {
+      if (!state.sync.queue.length) {
+        window.localStorage.removeItem(CONFIG.syncStorageKey);
+        return;
+      }
+      window.localStorage.setItem(CONFIG.syncStorageKey, JSON.stringify(state.sync.queue));
+    } catch (error) {
+      console.warn("Failed to save sync queue", error);
+      showToast("error", "บันทึกคิวในเครื่องไม่สำเร็จ (พื้นที่ localStorage อาจเต็ม)");
+    }
+  }
+
+  function sanitizeSyncQueueItem(item) {
+    if (!item || typeof item !== "object") return null;
+    if (!item.type || !item.id) return null;
+
+    return {
+      id: String(item.id),
+      type: String(item.type),
+      status: item.status === "failed" ? "failed" : "pending",
+      attempts: Number(item.attempts || 0),
+      createdAtMs: Number(item.createdAtMs || Date.now()),
+      nextRetryAtMs: Number(item.nextRetryAtMs || 0),
+      error: String(item.error || ""),
+      payload: item.payload && typeof item.payload === "object" ? item.payload : {},
+      localNote: item.localNote && typeof item.localNote === "object" ? item.localNote : null,
+      meta: item.meta && typeof item.meta === "object" ? item.meta : {},
+    };
+  }
+
+  function enqueueSyncOperation(operation) {
+    const item = sanitizeSyncQueueItem({
+      id: operation.id || `sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: operation.type,
+      status: operation.status || "pending",
+      attempts: operation.attempts || 0,
+      createdAtMs: operation.createdAtMs || Date.now(),
+      nextRetryAtMs: operation.nextRetryAtMs || 0,
+      error: operation.error || "",
+      payload: operation.payload || {},
+      localNote: operation.localNote || null,
+      meta: operation.meta || {},
+    });
+
+    if (!item) return null;
+
+    state.sync.queue.push(item);
+    saveSyncQueueToStorage();
+    rebuildVisibleNotesFromSources();
+    return item;
+  }
+
+  function removeSyncQueueItem(queueId) {
+    const before = state.sync.queue.length;
+    state.sync.queue = state.sync.queue.filter((item) => item.id !== queueId);
+    if (state.sync.queue.length !== before) {
+      saveSyncQueueToStorage();
+      rebuildVisibleNotesFromSources();
+    }
+  }
+
+  function updateSyncQueueItem(queueId, patch = {}) {
+    const target = state.sync.queue.find((item) => item.id === queueId);
+    if (!target) return null;
+    Object.assign(target, patch);
+    saveSyncQueueToStorage();
+    rebuildVisibleNotesFromSources();
+    return target;
+  }
+
+  function rebuildVisibleNotesFromSources() {
+    const pending = state.rawPendingNotes.map(cloneNoteForUi);
+    const done = state.rawDoneNotes.map(cloneNoteForUi);
+
+    const queue = state.sync.queue
+      .slice()
+      .sort((a, b) => (a.createdAtMs || 0) - (b.createdAtMs || 0));
+
+    for (const item of queue) {
+      applySyncOverlayToLists(item, pending, done);
+    }
+
+    state.pendingNotes = pending;
+    state.doneNotes = done;
+
+    if (state.noteModal.open && state.noteModal.mode !== "edit" && state.noteModal.noteId) {
+      const liveNote = getLocalNoteById(state.noteModal.noteId);
+      if (liveNote) {
+        state.noteModal.detail = { ...(state.noteModal.detail || {}), ...liveNote };
+        if (liveNote.__localImageDataUrl) {
+          state.noteModal.image = {
+            status: "loaded",
+            dataUrl: liveNote.__localImageDataUrl,
+            message: "",
+          };
+        }
+        renderNoteModal();
+      }
+    }
+
+    if (dom.pendingList && dom.historyList) {
+      renderList("pending");
+      renderList("done");
+    }
+
+    renderSyncHeader();
+  }
+
+  function cloneNoteForUi(note) {
+    return { ...(note || {}) };
+  }
+
+  function applySyncOverlayToLists(item, pending, done) {
+    const status = item.status === "syncing" ? "syncing" : item.status === "failed" ? "failed" : "pending";
+
+    if (item.type === "create") {
+      const localNote = buildLocalNoteFromQueueItem(item);
+      if (!localNote) return;
+      markNoteWithSyncState(localNote, item, status);
+      upsertNoteInList(pending, localNote);
+      removeNoteFromList(done, localNote.noteId);
+      return;
+    }
+
+    if (item.type === "update") {
+      const noteId = String(item.payload && item.payload.noteId || "");
+      if (!noteId) return;
+      const target = findNoteInLists(pending, done, noteId);
+      if (!target) return;
+
+      const data = item.payload.data && typeof item.payload.data === "object" ? item.payload.data : {};
+      if (Object.prototype.hasOwnProperty.call(data, "title")) {
+        target.title = String(data.title || "");
+      }
+      if (Object.prototype.hasOwnProperty.call(data, "description")) {
+        target.description = decodeDescriptionFromBackend(String(data.description || ""));
+      }
+      if (data.removeImage === true && !data.imageDataUrl && !data.imageBase64) {
+        target.imageFileId = "";
+        target.imageName = "";
+        target.imageMimeType = "";
+        target.__localImageDataUrl = "";
+      }
+      if (data.imageDataUrl) {
+        target.__localImageDataUrl = String(data.imageDataUrl);
+        target.imageMimeType = String(data.imageMimeType || target.imageMimeType || "image/jpeg");
+        target.imageName = String(data.imageName || target.imageName || "");
+      }
+      markNoteWithSyncState(target, item, status);
+      return;
+    }
+
+    if (item.type === "markDone") {
+      const noteId = String(item.payload && item.payload.noteId || "");
+      if (!noteId) return;
+
+      let note = removeNoteFromList(pending, noteId);
+      if (!note) {
+        note = findNoteInList(done, noteId);
+        if (!note && item.localNote) {
+          note = cloneNoteForUi(item.localNote);
+        }
+      }
+      if (!note) return;
+
+      note.status = "DONE";
+      note.checkedAt = note.checkedAt || item.meta.checkedAt || new Date(item.createdAtMs).toISOString();
+      markNoteWithSyncState(note, item, status);
+      upsertNoteInList(done, note);
+      return;
+    }
+  }
+
+  function buildLocalNoteFromQueueItem(item) {
+    if (item.localNote && typeof item.localNote === "object") {
+      return cloneNoteForUi(item.localNote);
+    }
+
+    const payload = item.payload || {};
+    const createdAt = new Date(item.createdAtMs || Date.now());
+    return {
+      noteId: String(item.meta && item.meta.localNoteId || item.id),
+      title: String(payload.title || ""),
+      description: decodeDescriptionFromBackend(String(payload.description || "")),
+      imageFileId: "",
+      imageUrl: "",
+      imageMimeType: String(payload.imageMimeType || ""),
+      imageName: String(payload.imageName || ""),
+      status: "PENDING",
+      createdAt: createdAt.toISOString(),
+      createdDate: toLocalDateInputValue(createdAt),
+      checkedAt: "",
+      updatedAt: "",
+      imageDeletedAt: "",
+      hasImage: Boolean(payload.imageDataUrl),
+      isImageDeleted: false,
+      __localOnly: true,
+      __localImageDataUrl: String(payload.imageDataUrl || ""),
+    };
+  }
+
+  function createOptimisticLocalNoteForCreate(payload) {
+    const now = new Date();
+    return {
+      noteId: `local-${now.getTime()}-${Math.random().toString(36).slice(2, 7)}`,
+      title: String(payload.title || ""),
+      description: decodeDescriptionFromBackend(String(payload.description || "")),
+      imageFileId: "",
+      imageUrl: "",
+      imageMimeType: String(payload.imageMimeType || ""),
+      imageName: String(payload.imageName || ""),
+      status: "PENDING",
+      createdAt: now.toISOString(),
+      createdDate: toLocalDateInputValue(now),
+      checkedAt: "",
+      updatedAt: "",
+      imageDeletedAt: "",
+      hasImage: Boolean(payload.imageDataUrl),
+      isImageDeleted: false,
+      __localOnly: true,
+      __localImageDataUrl: String(payload.imageDataUrl || ""),
+    };
+  }
+
+  function markNoteWithSyncState(note, queueItem, syncState) {
+    note.__syncQueueId = queueItem.id;
+    note.__syncState = syncState;
+    note.__syncError = String(queueItem.error || "");
+    note.__syncAttempts = Number(queueItem.attempts || 0);
+    if (queueItem.type === "create") {
+      note.__localOnly = true;
+    }
+    return note;
+  }
+
+  function clearNoteSyncState(note) {
+    if (!note) return note;
+    delete note.__syncQueueId;
+    delete note.__syncState;
+    delete note.__syncError;
+    delete note.__syncAttempts;
+    delete note.__localOnly;
+    delete note.__localImageDataUrl;
+    return note;
+  }
+
+  function findNoteInList(list, noteId) {
+    return list.find((note) => String(note.noteId) === String(noteId)) || null;
+  }
+
+  function findNoteInLists(pending, done, noteId) {
+    return findNoteInList(pending, noteId) || findNoteInList(done, noteId);
+  }
+
+  function upsertNoteInList(list, note) {
+    const idx = list.findIndex((item) => String(item.noteId) === String(note.noteId));
+    if (idx >= 0) {
+      list[idx] = { ...list[idx], ...note };
+      return list[idx];
+    }
+    list.push(note);
+    return note;
+  }
+
+  function removeNoteFromList(list, noteId) {
+    const idx = list.findIndex((item) => String(item.noteId) === String(noteId));
+    if (idx < 0) return null;
+    const [removed] = list.splice(idx, 1);
+    return removed || null;
+  }
+
+  function renderSyncHeader() {
+    if (!dom.syncStatus || !dom.syncStatusText || !dom.btnRetrySync) return;
+
+    const total = state.sync.queue.length;
+    const syncing = state.sync.queue.filter((item) => item.status === "syncing").length;
+    const failed = state.sync.queue.filter((item) => item.status === "failed").length;
+
+    let stateName = "idle";
+    let text = "Sync: ไม่มีคิวค้าง";
+
+    if (total > 0 && state.sync.processing) {
+      stateName = "syncing";
+      text = `Sync: กำลังส่ง ${syncing || 1}/${total} รายการ`;
+    } else if (failed > 0) {
+      stateName = "error";
+      text = `Sync: ค้างส่ง ${failed} รายการ (รวม ${total})`;
+    } else if (total > 0) {
+      stateName = "pending";
+      text = `Sync: รอส่ง ${total} รายการ`;
+    }
+
+    dom.syncStatus.dataset.state = stateName;
+    dom.syncStatusText.textContent = text;
+
+    if (total > 0) {
+      dom.btnRetrySync.classList.remove("hidden");
+      dom.btnRetrySync.textContent = failed > 0 ? `ส่งคิวอีกครั้ง (${failed})` : `Sync คิว (${total})`;
+      dom.btnRetrySync.disabled = state.sync.processing;
+    } else {
+      dom.btnRetrySync.classList.add("hidden");
+      dom.btnRetrySync.disabled = false;
+      dom.btnRetrySync.textContent = "ส่งคิวอีกครั้ง";
+    }
+  }
+
+  function clearSyncRetryTimer() {
+    if (!state.sync.timerId) return;
+    window.clearTimeout(state.sync.timerId);
+    state.sync.timerId = null;
+  }
+
+  function scheduleSyncRetry() {
+    clearSyncRetryTimer();
+    if (!state.sync.queue.length) return;
+
+    const now = Date.now();
+    const dueItems = state.sync.queue.filter((item) => item.status !== "syncing");
+    if (!dueItems.length) return;
+
+    const earliest = dueItems.reduce((min, item) => {
+      const t = Number(item.nextRetryAtMs || 0);
+      if (!min) return t;
+      return t && t < min ? t : min;
+    }, 0);
+
+    const delay = earliest && earliest > now ? Math.min(Math.max(earliest - now, 250), CONFIG.syncRetryMaxMs) : 250;
+    state.sync.timerId = window.setTimeout(() => {
+      state.sync.timerId = null;
+      void processSyncQueue({ reason: "auto-retry" });
+    }, delay);
+  }
+
+  function buildRetryDelayMs(attempts) {
+    const exp = Math.max(0, Number(attempts || 1) - 1);
+    return Math.min(CONFIG.syncRetryBaseMs * (2 ** exp), CONFIG.syncRetryMaxMs);
+  }
+
+  function getNextSyncQueueItem(options = {}) {
+    const now = Date.now();
+    const manual = Boolean(options.manual);
+    const excludeIds = options.excludeIds instanceof Set ? options.excludeIds : null;
+
+    return state.sync.queue.find((item) => {
+      if (excludeIds && excludeIds.has(item.id)) return false;
+      if (item.status === "syncing") return false;
+      if (manual) return true;
+      const nextTime = Number(item.nextRetryAtMs || 0);
+      return !nextTime || nextTime <= now;
+    }) || null;
+  }
+
+  async function processSyncQueue(options = {}) {
+    if (state.sync.processing) return;
+    if (!isApiConfigured()) {
+      renderSyncHeader();
+      return;
+    }
+    if (!state.sync.queue.length) {
+      renderSyncHeader();
+      return;
+    }
+
+    state.sync.processing = true;
+    renderSyncHeader();
+
+    try {
+      const processedIds = new Set();
+      let nextItem = getNextSyncQueueItem({ ...options, excludeIds: processedIds });
+      while (nextItem) {
+        processedIds.add(nextItem.id);
+        nextItem.status = "syncing";
+        nextItem.error = "";
+        saveSyncQueueToStorage();
+        rebuildVisibleNotesFromSources();
+
+        try {
+          await syncQueueItemToApi(nextItem);
+          removeSyncQueueItem(nextItem.id);
+        } catch (error) {
+          nextItem.status = "failed";
+          nextItem.attempts = Number(nextItem.attempts || 0) + 1;
+          nextItem.error = getErrorMessage(error);
+          nextItem.nextRetryAtMs = Date.now() + buildRetryDelayMs(nextItem.attempts);
+          saveSyncQueueToStorage();
+          rebuildVisibleNotesFromSources();
+          showToast("error", `ส่งคิวไม่สำเร็จ (เก็บไว้ในเครื่อง): ${nextItem.error}`);
+        }
+
+        nextItem = getNextSyncQueueItem({ ...options, excludeIds: processedIds });
+      }
+    } finally {
+      state.sync.processing = false;
+      renderSyncHeader();
+      scheduleSyncRetry();
+    }
+  }
+
+  async function syncQueueItemToApi(queueItem) {
+    if (queueItem.type === "create") {
+      const response = await apiPost("createNote", queueItem.payload || {});
+      const rawItem = extractNoteDetail(response);
+      const note = normalizeNote(rawItem || {});
+      if (!note.noteId) {
+        throw new Error("API createNote ไม่ส่ง noteId กลับมา");
+      }
+
+      const localNoteId =
+        String((queueItem.meta && queueItem.meta.localNoteId) || (queueItem.localNote && queueItem.localNote.noteId) || "");
+      if (state.noteModal.open && localNoteId && String(state.noteModal.noteId) === localNoteId) {
+        state.noteModal.noteId = String(note.noteId);
+      }
+
+      clearNoteSyncState(note);
+      state.rawPendingNotes = state.rawPendingNotes.filter((n) => String(n.noteId) !== String(note.noteId));
+      state.rawPendingNotes.push(note);
+      rebuildVisibleNotesFromSources();
+      showToast("success", "บันทึกแล้ว");
+      return;
+    }
+
+    if (queueItem.type === "update") {
+      const payload = queueItem.payload || {};
+      const response = await apiPost("updateNote", payload);
+      const rawItem = extractNoteDetail(response);
+
+      if (rawItem) {
+        const note = normalizeNote(rawItem);
+        if (note.noteId) {
+          state.rawPendingNotes = state.rawPendingNotes.filter((n) => String(n.noteId) !== String(note.noteId));
+          state.rawDoneNotes = state.rawDoneNotes.filter((n) => String(n.noteId) !== String(note.noteId));
+          if (normalizeStatus(note.status || "PENDING") === "DONE") {
+            state.rawDoneNotes.push({ ...note, status: "DONE" });
+          } else {
+            state.rawPendingNotes.push({ ...note, status: "PENDING" });
+          }
+        }
+      }
+
+      rebuildVisibleNotesFromSources();
+      showToast("success", "บันทึกแล้ว");
+      return;
+    }
+
+    if (queueItem.type === "markDone") {
+      const payload = queueItem.payload || {};
+      const noteId = String(payload.noteId || "");
+      const response = await apiPost("markNoteDone", payload);
+      const rawItem = extractNoteDetail(response);
+      const note = normalizeNote(rawItem || { noteId, status: "DONE" });
+
+      state.rawPendingNotes = state.rawPendingNotes.filter((n) => String(n.noteId) !== String(noteId));
+      state.rawDoneNotes = state.rawDoneNotes.filter((n) => String(n.noteId) !== String(noteId));
+      if (note.noteId) {
+        state.rawDoneNotes.push({ ...note, status: "DONE" });
+      }
+
+      rebuildVisibleNotesFromSources();
+      showToast("success", "บันทึกสถานะแล้ว");
+      return;
+    }
+
+    throw new Error(`Unknown sync queue item type: ${queueItem.type}`);
   }
 
   function openAddPage() {
@@ -365,8 +880,16 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
         payload.imageMimeType = state.addForm.image.imageMimeType;
       }
 
-      await apiPost("createNote", payload);
-      showToast("success", "บันทึก NOTE เรียบร้อย");
+      const localNote = createOptimisticLocalNoteForCreate(payload);
+      enqueueSyncOperation({
+        type: "create",
+        payload,
+        localNote,
+        meta: {
+          localNoteId: localNote.noteId,
+        },
+      });
+      showToast("success", "บันทึกในเครื่องแล้ว กำลังส่งขึ้นระบบ...");
 
       dom.addNoteForm.reset();
       clearAddFormImage({ silent: true });
@@ -374,7 +897,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       dom.addDescription.classList.remove("is-invalid");
 
       closeAddPage({ force: true });
-      await refreshPendingNotes();
+      void processSyncQueue({ reason: "create-note-submit" });
     } catch (error) {
       showToast("error", `บันทึก NOTE ไม่สำเร็จ: ${getErrorMessage(error)}`);
     } finally {
@@ -560,36 +1083,56 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 
   function renderNoteCard(note, scope) {
     const isPending = scope === "pending";
-    const hasImage = Boolean(note.imageFileId) && !note.imageDeleted;
+    const hasImage = (Boolean(note.imageFileId) && !note.imageDeleted) || Boolean(note.__localImageDataUrl);
     const createdAt = formatDateTime(note.createdAt) || "-";
     const checkedAt = note.checkedAt ? formatDateTime(note.checkedAt) : "";
     const status = normalizeStatus(note.status || (isPending ? "PENDING" : "DONE"));
     const desc = clipText(note.description || "-", 120);
+    const syncState = String(note.__syncState || "");
+    const syncMetaText = buildNoteSyncMetaText(note);
+    const checklistDisabled = Boolean(note.__localOnly);
 
     return `
       <li class="note-card">
         <div>
           <div class="note-card__header">
             <h3 class="note-card__title">${escapeHtml(note.title || "(ไม่มีหัวข้อ)")}</h3>
-            <span class="chip ${status === "DONE" ? "chip--done" : "chip--pending"}">${escapeHtml(status)}</span>
+            <div class="inline-row">
+              <span class="chip ${status === "DONE" ? "chip--done" : "chip--pending"}">${escapeHtml(status)}</span>
+              ${
+                syncState
+                  ? `<span class="chip ${syncState === "failed" ? "chip--warn" : "chip--pending"}">${escapeHtml(syncState === "syncing" ? "SYNCING" : syncState === "failed" ? "RETRY" : "QUEUED")}</span>`
+                  : ""
+              }
+            </div>
           </div>
           <p class="note-card__desc">${escapeHtml(desc)}</p>
           <div class="note-card__meta">
             <span class="note-card__meta-item">สร้าง: ${escapeHtml(createdAt)}</span>
             ${checkedAt ? `<span class="note-card__meta-item">เสร็จ: ${escapeHtml(checkedAt)}</span>` : ""}
             ${hasImage ? '<span class="note-card__meta-item">มีรูป</span>' : ""}
+            ${syncMetaText ? `<span class="note-card__meta-item">${escapeHtml(syncMetaText)}</span>` : ""}
           </div>
         </div>
         <div class="note-card__actions">
           <button type="button" class="btn btn--outline btn--sm" data-action="view-detail" data-note-id="${escapeAttribute(note.noteId)}">ดูรายละเอียด</button>
           ${
             isPending
-              ? `<button type="button" class="btn btn--success btn--sm" data-action="request-done" data-note-id="${escapeAttribute(note.noteId)}">Checklist</button>`
+              ? `<button type="button" class="btn btn--success btn--sm" data-action="request-done" data-note-id="${escapeAttribute(note.noteId)}" ${checklistDisabled ? "disabled" : ""}>Checklist</button>`
               : ""
           }
         </div>
       </li>
     `;
+  }
+
+  function buildNoteSyncMetaText(note) {
+    const stateName = String(note.__syncState || "");
+    if (!stateName) return "";
+    if (stateName === "syncing") return "กำลังส่ง...";
+    if (stateName === "failed") return `ค้างส่ง (${Number(note.__syncAttempts || 0)})`;
+    if (stateName === "pending") return "รอส่ง";
+    return "";
   }
 
   function renderSkeletonCards(count) {
@@ -678,11 +1221,27 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 
   async function loadNoteDetail(noteId) {
     const token = ++state.noteModal.requestToken;
+    const localNote = getLocalNoteById(noteId);
     state.noteModal.loading = true;
     state.noteModal.error = "";
-    state.noteModal.detail = getLocalNoteById(noteId) || null;
+    state.noteModal.detail = localNote || null;
     state.noteModal.image = { status: "idle", dataUrl: "", message: "" };
     renderNoteModal();
+
+    if (localNote && localNote.__localOnly) {
+      state.noteModal.loading = false;
+      if (localNote.__localImageDataUrl) {
+        state.noteModal.image = {
+          status: "loaded",
+          dataUrl: localNote.__localImageDataUrl,
+          message: "",
+        };
+      } else {
+        state.noteModal.image = { status: "none", dataUrl: "", message: "" };
+      }
+      renderNoteModal();
+      return;
+    }
 
     try {
       const response = await apiGet("getNoteDetail", { noteId });
@@ -691,11 +1250,18 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       const rawDetail = extractNoteDetail(response);
       const detail = normalizeNote(rawDetail || getLocalNoteById(noteId) || {});
       if (!detail.noteId) detail.noteId = String(noteId);
-      state.noteModal.detail = detail;
+      const overlayNote = getLocalNoteById(noteId);
+      state.noteModal.detail = overlayNote ? { ...detail, ...overlayNote } : detail;
       state.noteModal.error = "";
       state.noteModal.loading = false;
 
-      if (detail.imageDataUrl) {
+      if (state.noteModal.detail.__localImageDataUrl) {
+        state.noteModal.image = {
+          status: "loaded",
+          dataUrl: state.noteModal.detail.__localImageDataUrl,
+          message: "",
+        };
+      } else if (detail.imageDataUrl) {
         state.noteModal.image = { status: "loaded", dataUrl: detail.imageDataUrl, message: "" };
       } else if (detail.imageFileId && !detail.imageDeleted) {
         state.noteModal.image = { status: "loading", dataUrl: "", message: "" };
@@ -705,7 +1271,12 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 
       renderNoteModal();
 
-      if (detail.imageFileId && !detail.imageDeleted && !detail.imageDataUrl) {
+      if (
+        detail.imageFileId &&
+        !detail.imageDeleted &&
+        !detail.imageDataUrl &&
+        !state.noteModal.detail.__localImageDataUrl
+      ) {
         await loadNoteImageData(detail.imageFileId, token);
       }
     } catch (error) {
@@ -796,8 +1367,10 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
   function renderNoteModalView(detail) {
     const status = normalizeStatus(detail.status || "PENDING");
     const isPending = status !== "DONE";
+    const isLocalOnly = Boolean(detail.__localOnly);
     const createdAt = formatDateTime(detail.createdAt) || "-";
     const checkedAt = detail.checkedAt ? formatDateTime(detail.checkedAt) : "-";
+    const syncMetaText = buildNoteSyncMetaText(detail);
     const imageBlock = renderDetailImageView();
 
     return `
@@ -826,6 +1399,14 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
               <span class="detail-row__label">noteId</span>
               <div class="detail-row__value">${escapeHtml(detail.noteId || "-")}</div>
             </div>
+            ${
+              syncMetaText
+                ? `<div class="detail-row">
+                     <span class="detail-row__label">sync</span>
+                     <div class="detail-row__value">${escapeHtml(syncMetaText)}${detail.__syncError ? ` (${escapeHtml(detail.__syncError)})` : ""}</div>
+                   </div>`
+                : ""
+            }
             <div class="detail-row detail-row--full">
               <span class="detail-row__label">รายละเอียด</span>
               <div class="detail-row__value preserve-linebreak">${escapeHtml(detail.description || "-")}</div>
@@ -837,9 +1418,14 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 
         <div class="detail-actions">
           ${
-            isPending
+            isPending && !isLocalOnly
               ? `<button type="button" class="btn btn--outline" data-action="modal-enter-edit">แก้ไข</button>
                  <button type="button" class="btn btn--success" data-action="modal-request-done" data-note-id="${escapeAttribute(detail.noteId || "")}">Checklist เสร็จแล้ว</button>`
+              : ""
+          }
+          ${
+            isPending && isLocalOnly
+              ? `<span class="badge badge--subtle">รอ sync ให้เสร็จก่อน จึงแก้ไข/Checklist ได้</span>`
               : ""
           }
           <button type="button" class="btn btn--ghost" data-action="close-note-modal">ปิด</button>
@@ -852,6 +1438,18 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     const detail = state.noteModal.detail || {};
     const imageState = state.noteModal.image;
     const hasImageRecord = Boolean(detail.imageFileId) && !detail.imageDeleted;
+    const localPreview = String(detail.__localImageDataUrl || "");
+
+    if (localPreview) {
+      return `
+        <div class="detail-image">
+          <div class="detail-image__frame">
+            <img src="${escapeAttribute(localPreview)}" alt="รูปภาพประกอบ NOTE (local preview)">
+          </div>
+          <div class="detail-image__meta">แสดงตัวอย่างรูปจากเครื่อง (รอ sync)</div>
+        </div>
+      `;
+    }
 
     if (!hasImageRecord && imageState.status !== "loaded") {
       return `
@@ -1233,19 +1831,22 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
         data.removeImage = true;
       }
 
-      await apiPost("updateNote", {
-        noteId: state.noteModal.noteId,
-        data,
+      enqueueSyncOperation({
+        type: "update",
+        payload: {
+          noteId: state.noteModal.noteId,
+          data,
+        },
       });
 
-      showToast("success", "บันทึกการแก้ไขเรียบร้อย");
+      showToast("success", "อัปเดตในเครื่องแล้ว กำลังส่งขึ้นระบบ...");
 
       state.noteModal.saving = false;
       state.noteModal.mode = "view";
       state.noteModal.editDraft = null;
-
-      await Promise.all([refreshPendingNotes(), refreshDoneNotes()]);
-      await loadNoteDetail(state.noteModal.noteId);
+      rebuildVisibleNotesFromSources();
+      renderNoteModal();
+      void processSyncQueue({ reason: "update-note-submit" });
     } catch (error) {
       state.noteModal.saving = false;
       renderNoteModal();
@@ -1304,19 +1905,27 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     const noteId = state.confirm.noteId;
 
     try {
-      await apiPost("markNoteDone", { noteId });
+      const noteSnapshot = getLocalNoteById(noteId);
+      if (noteSnapshot && noteSnapshot.__localOnly) {
+        throw new Error("รายการนี้ยังซิงก์ไม่เสร็จ กรุณารอให้บันทึกขึ้นระบบก่อน");
+      }
 
-      state.pendingNotes = state.pendingNotes.filter((note) => String(note.noteId) !== String(noteId));
-      renderList("pending");
+      enqueueSyncOperation({
+        type: "markDone",
+        payload: { noteId },
+        localNote: noteSnapshot ? cloneNoteForUi(noteSnapshot) : null,
+        meta: {
+          checkedAt: new Date().toISOString(),
+        },
+      });
 
       if (state.noteModal.open && String(state.noteModal.noteId) === String(noteId)) {
         closeNoteModal();
       }
 
       closeConfirmModal();
-      showToast("success", "ย้าย NOTE ไป History แล้ว");
-
-      await Promise.all([refreshPendingNotes(), refreshDoneNotes()]);
+      showToast("success", "ย้ายในเครื่องแล้ว กำลังส่งอัปเดตสถานะ...");
+      void processSyncQueue({ reason: "mark-done-submit" });
     } catch (error) {
       state.confirm.busy = false;
       renderConfirmModalState();
@@ -1483,7 +2092,9 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 
   function extractNoteDetail(response) {
     if (!response) return null;
+    if (response.item && typeof response.item === "object") return response.item;
     if (response.note && typeof response.note === "object") return response.note;
+    if (response.data && response.data.item && typeof response.data.item === "object") return response.data.item;
     if (response.data && response.data.note && typeof response.data.note === "object") return response.data.note;
     if (response.data && typeof response.data === "object" && !Array.isArray(response.data)) return response.data;
     if (response.result && typeof response.result === "object") return response.result;
@@ -1495,6 +2106,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     if (!response) return "";
     if (typeof response.dataUrl === "string") return response.dataUrl;
     if (typeof response.imageDataUrl === "string") return response.imageDataUrl;
+    if (response.item && typeof response.item.dataUrl === "string") return response.item.dataUrl;
     if (response.data && typeof response.data.dataUrl === "string") return response.data.dataUrl;
     if (response.data && typeof response.data.imageDataUrl === "string") return response.data.imageDataUrl;
     if (response.result && typeof response.result.dataUrl === "string") return response.result.dataUrl;

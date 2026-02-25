@@ -23,7 +23,13 @@
         <span id="api-status-text">API: ยังไม่เชื่อมต่อ</span>
       </div>
 
+      <div class="topbar__status" id="sync-status" data-state="idle" aria-live="polite">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="sync-status-text">Sync: ไม่มีคิวค้าง</span>
+      </div>
+
       <div class="topbar__actions">
+        <button type="button" class="btn btn--ghost btn--sm hidden" id="btn-retry-sync">ส่งคิวอีกครั้ง</button>
         <button type="button" class="btn btn--ghost btn--sm" id="btn-refresh-all">รีเฟรช</button>
         <button
           type="button"

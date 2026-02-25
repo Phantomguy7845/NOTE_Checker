@@ -170,6 +170,14 @@ img {
   background: #ffd166;
 }
 
+.topbar__status[data-state="pending"] .status-dot {
+  background: #ffd166;
+}
+
+.topbar__status[data-state="syncing"] .status-dot {
+  background: #7dd3fc;
+}
+
 .topbar__status[data-state="error"] .status-dot {
   background: #ff6b7a;
 }
@@ -1065,7 +1073,7 @@ textarea.is-invalid {
   .topbar {
     margin: 0 -16px;
     padding: 12px 16px;
-    grid-template-columns: auto auto 1fr;
+    grid-template-columns: auto auto auto 1fr;
     gap: 12px;
   }
 
