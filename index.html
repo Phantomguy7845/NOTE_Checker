@@ -28,9 +28,18 @@
         <span id="sync-status-text">Sync: ไม่มีคิวค้าง</span>
       </div>
 
+      <div class="topbar__auth hidden" id="auth-user-box" aria-live="polite">
+        <div class="topbar__auth-texts">
+          <span class="topbar__auth-name" id="auth-display-name">-</span>
+          <span class="topbar__auth-role" id="auth-role-badge">USER</span>
+        </div>
+      </div>
+
       <div class="topbar__actions">
         <button type="button" class="btn btn--ghost btn--sm hidden" id="btn-retry-sync">ส่งคิวอีกครั้ง</button>
+        <button type="button" class="btn btn--ghost btn--sm hidden" id="btn-open-user-mgmt">ผู้ใช้</button>
         <button type="button" class="btn btn--ghost btn--sm" id="btn-refresh-all">รีเฟรช</button>
+        <button type="button" class="btn btn--ghost btn--sm hidden" id="btn-auth-logout">ออกจากระบบ</button>
         <button
           type="button"
           class="btn btn--primary btn--sm"
@@ -88,6 +97,22 @@
             <select id="pending-sort">
               <option value="OLDEST">เก่ากว่า - ล่าสุด</option>
               <option value="NEWEST">ล่าสุด - เก่ากว่า</option>
+            </select>
+          </label>
+
+          <label class="field field--compact">
+            <span class="field__label">ผู้ใช้ (โหมด)</span>
+            <select id="pending-user-filter-mode">
+              <option value="ANY">Any activity</option>
+              <option value="CREATED">Created by</option>
+              <option value="CHECKED">Checked by</option>
+            </select>
+          </label>
+
+          <label class="field field--compact">
+            <span class="field__label">ผู้ใช้</span>
+            <select id="pending-user-id">
+              <option value="">ทุกคน</option>
             </select>
           </label>
         </div>
@@ -236,6 +261,22 @@
             <option value="OLDEST">เก่ากว่า - ล่าสุด</option>
           </select>
         </label>
+
+        <label class="field field--compact">
+          <span class="field__label">ผู้ใช้ (โหมด)</span>
+          <select id="history-user-filter-mode">
+            <option value="ANY">Any activity</option>
+            <option value="CREATED">Created by</option>
+            <option value="CHECKED">Checked by</option>
+          </select>
+        </label>
+
+        <label class="field field--compact">
+          <span class="field__label">ผู้ใช้</span>
+          <select id="history-user-id">
+            <option value="">ทุกคน</option>
+          </select>
+        </label>
       </div>
 
       <div class="toolbar-actions toolbar-actions--sidebar">
@@ -335,6 +376,31 @@
       <span class="spinner" aria-hidden="true"></span>
       <p id="global-loading-text">กำลังโหลดข้อมูล...</p>
     </div>
+  </div>
+
+  <div id="auth-login-overlay" class="auth-login-overlay hidden" aria-hidden="true">
+    <div class="auth-login-overlay__backdrop"></div>
+    <section class="auth-login-card" role="dialog" aria-modal="true" aria-labelledby="auth-login-heading">
+      <div class="auth-login-card__header">
+        <div class="brand-mark" aria-hidden="true">NC</div>
+        <div>
+          <h2 id="auth-login-heading">เข้าสู่ระบบ NOTE Checker</h2>
+          <p id="auth-login-subtext">กรุณาเข้าสู่ระบบก่อนใช้งาน</p>
+        </div>
+      </div>
+      <form id="auth-login-form" class="form-stack" novalidate>
+        <label class="field">
+          <span class="field__label">Username</span>
+          <input id="auth-username" type="text" autocomplete="username" required>
+        </label>
+        <label class="field">
+          <span class="field__label">Password</span>
+          <input id="auth-password" type="password" autocomplete="current-password" required>
+        </label>
+        <p id="auth-login-error" class="auth-login-error hidden" role="alert"></p>
+        <button type="submit" class="btn btn--primary btn--block" id="btn-auth-login">เข้าสู่ระบบ</button>
+      </form>
+    </section>
   </div>
 
   <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>

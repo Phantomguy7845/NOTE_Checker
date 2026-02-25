@@ -1,3 +1,5 @@
+const AUTH_STORAGE_KEY = "NOTE_APP_SESSION_TOKEN";
+const AUTH_USER_STORAGE_KEY = "NOTE_APP_CURRENT_USER";
 const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 const imageMemoryCache = new Map();
 const imageInflightCache = new Map();
@@ -42,8 +44,16 @@ const imageInflightCache = new Map();
       done: "",
     },
     filters: {
-      pending: { search: "", dateFrom: "", dateTo: "", sort: "OLDEST" },
-      done: { search: "", dateFrom: "", dateTo: "", sort: "NEWEST", timeField: "CHECKED_AT" },
+      pending: { search: "", dateFrom: "", dateTo: "", sort: "OLDEST", userFilterMode: "ANY", userId: "" },
+      done: {
+        search: "",
+        dateFrom: "",
+        dateTo: "",
+        sort: "NEWEST",
+        timeField: "CHECKED_AT",
+        userFilterMode: "ANY",
+        userId: "",
+      },
     },
     addForm: {
       saving: false,
@@ -93,6 +103,19 @@ const imageInflightCache = new Map();
       processing: false,
       timerId: null,
     },
+    // === AUTH PATCH START ===
+    auth: {
+      token: "",
+      user: null,
+      users: [],
+      loginOpen: true,
+      loginBusy: false,
+      loginError: "",
+      sessionChecking: false,
+      appStarted: false,
+      handlingUnauthorized: false,
+    },
+    // === AUTH PATCH END ===
   };
 
   const dom = {};
@@ -112,7 +135,11 @@ const imageInflightCache = new Map();
     loadLocalNoteCacheFromStorage();
     void cleanupDoneImageCache(CONFIG.doneImageCacheTtlDays);
     loadSyncQueueFromStorage();
+    authLoadSessionCache();
     renderSyncHeader();
+    authRenderHeader();
+    authRenderLoginOverlay();
+    userFilterRenderUserOptions();
     renderAddImagePreview();
     rebuildVisibleNotesFromSources();
     renderList("pending");
@@ -120,12 +147,14 @@ const imageInflightCache = new Map();
 
     if (!isApiConfigured()) {
       setApiStatus("warn", "API: โปรดตั้งค่า API_BASE ใน assets/app.js");
+      authSetLoginState({ loginOpen: true, loginError: "ยังไม่ได้ตั้งค่า API_BASE" });
       showToast("warn", "แก้ค่า API_BASE ให้เป็น Cloudflare Worker URL ก่อนใช้งานจริง");
       return;
     }
 
-    await bootstrap();
-    void processSyncQueue({ reason: "post-bootstrap" });
+    const isAuthReady = await authInitializeSession();
+    if (!isAuthReady) return;
+    await authStartAppFlow({ reason: "startup" });
   }
 
   function cacheDom() {
@@ -138,8 +167,19 @@ const imageInflightCache = new Map();
     dom.syncStatusText = document.getElementById("sync-status-text");
     dom.btnRefreshAll = document.getElementById("btn-refresh-all");
     dom.btnRetrySync = document.getElementById("btn-retry-sync");
+    dom.btnOpenUserMgmt = document.getElementById("btn-open-user-mgmt");
+    dom.btnAuthLogout = document.getElementById("btn-auth-logout");
     dom.btnOpenHistory = document.getElementById("btn-open-history");
     dom.btnOpenAddPage = document.getElementById("btn-open-add-page");
+    dom.authUserBox = document.getElementById("auth-user-box");
+    dom.authDisplayName = document.getElementById("auth-display-name");
+    dom.authRoleBadge = document.getElementById("auth-role-badge");
+    dom.authLoginOverlay = document.getElementById("auth-login-overlay");
+    dom.authLoginForm = document.getElementById("auth-login-form");
+    dom.authUsername = document.getElementById("auth-username");
+    dom.authPassword = document.getElementById("auth-password");
+    dom.authLoginError = document.getElementById("auth-login-error");
+    dom.btnAuthLogin = document.getElementById("btn-auth-login");
 
     dom.addPageBackdrop = document.getElementById("add-page-backdrop");
     dom.addPageShell = document.getElementById("add-page-shell");
@@ -163,6 +203,8 @@ const imageInflightCache = new Map();
     dom.pendingDateFrom = document.getElementById("pending-date-from");
     dom.pendingDateTo = document.getElementById("pending-date-to");
     dom.pendingSort = document.getElementById("pending-sort");
+    dom.pendingUserFilterMode = document.getElementById("pending-user-filter-mode");
+    dom.pendingUserId = document.getElementById("pending-user-id");
     dom.btnPendingClearFilters = document.getElementById("btn-pending-clear-filters");
     dom.pendingCount = document.getElementById("pending-count");
     dom.pendingList = document.getElementById("pending-list");
@@ -177,6 +219,8 @@ const imageInflightCache = new Map();
     dom.historyDateTo = document.getElementById("history-date-to");
     dom.historyTimeField = document.getElementById("history-time-field");
     dom.historySort = document.getElementById("history-sort");
+    dom.historyUserFilterMode = document.getElementById("history-user-filter-mode");
+    dom.historyUserId = document.getElementById("history-user-id");
     dom.btnHistoryClearFilters = document.getElementById("btn-history-clear-filters");
     dom.historyCount = document.getElementById("history-count");
     dom.historyList = document.getElementById("history-list");
@@ -223,6 +267,21 @@ const imageInflightCache = new Map();
     dom.btnRetrySync.addEventListener("click", () => {
       void processSyncQueue({ manual: true, reason: "manual-retry" });
     });
+    if (dom.authLoginForm) {
+      dom.authLoginForm.addEventListener("submit", (event) => {
+        void authHandleLoginSubmit(event);
+      });
+    }
+    if (dom.btnAuthLogout) {
+      dom.btnAuthLogout.addEventListener("click", () => {
+        void authLogout({ source: "manual" });
+      });
+    }
+    if (dom.btnOpenUserMgmt) {
+      dom.btnOpenUserMgmt.addEventListener("click", () => {
+        showToast("warn", "User Management (ADMIN) เตรียม hook ไว้แล้ว");
+      });
+    }
     dom.btnOpenAddPage.addEventListener("click", openAddPage);
     dom.btnOpenHistory.addEventListener("click", openHistoryPanel);
     dom.btnCloseHistory.addEventListener("click", closeHistoryPanel);
@@ -266,6 +325,22 @@ const imageInflightCache = new Map();
       state.filters.pending.sort = event.target.value;
       renderList("pending");
     });
+    if (dom.pendingUserFilterMode) {
+      dom.pendingUserFilterMode.addEventListener("change", (event) => {
+        state.filters.pending.userFilterMode = userFilterNormalizeMode(event.target.value);
+        if (state.filters.pending.userId) {
+          void refreshPendingNotes();
+          return;
+        }
+        renderFilterControls("pending");
+      });
+    }
+    if (dom.pendingUserId) {
+      dom.pendingUserId.addEventListener("change", (event) => {
+        state.filters.pending.userId = String(event.target.value || "");
+        void refreshPendingNotes();
+      });
+    }
     dom.btnPendingClearFilters.addEventListener("click", () => resetFilters("pending"));
 
     dom.historySearch.addEventListener("input", (event) => {
@@ -290,6 +365,22 @@ const imageInflightCache = new Map();
       state.filters.done.sort = event.target.value;
       renderList("done");
     });
+    if (dom.historyUserFilterMode) {
+      dom.historyUserFilterMode.addEventListener("change", (event) => {
+        state.filters.done.userFilterMode = userFilterNormalizeMode(event.target.value);
+        if (state.filters.done.userId) {
+          void refreshDoneNotes();
+          return;
+        }
+        renderFilterControls("done");
+      });
+    }
+    if (dom.historyUserId) {
+      dom.historyUserId.addEventListener("change", (event) => {
+        state.filters.done.userId = String(event.target.value || "");
+        void refreshDoneNotes();
+      });
+    }
     dom.btnHistoryClearFilters.addEventListener("click", () => resetFilters("done"));
 
     dom.pendingList.addEventListener("click", (event) => handleListClick(event, "pending"));
@@ -344,6 +435,487 @@ const imageInflightCache = new Map();
     setHistoryFiltersCollapsed(!state.sidebar.historyFiltersCollapsed);
   }
 
+  // === AUTH PATCH START ===
+  function authGetDefaultStatePatch() {
+    return {
+      token: "",
+      user: null,
+      users: [],
+      loginOpen: true,
+      loginBusy: false,
+      loginError: "",
+      sessionChecking: false,
+      appStarted: false,
+      handlingUnauthorized: false,
+    };
+  }
+
+  function authNormalizeUser(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const userId = String(coalesce(raw.userId, raw.id, raw.uid, raw.user_id, "") || "").trim();
+    const username = String(coalesce(raw.username, raw.userName, raw.login, "") || "").trim();
+    const displayName = String(coalesce(raw.displayName, raw.name, raw.fullName, username, userId, "") || "").trim();
+    const role = String(coalesce(raw.role, raw.userRole, "USER") || "USER").trim().toUpperCase();
+
+    if (!userId && !username && !displayName) return null;
+
+    return {
+      ...raw,
+      userId: userId || username || displayName,
+      username: username || userId || "",
+      displayName: displayName || username || userId || "Unknown",
+      role: role === "ADMIN" ? "ADMIN" : "USER",
+    };
+  }
+
+  function authLoadSessionCache() {
+    let token = "";
+    let user = null;
+
+    try {
+      token = String(window.localStorage.getItem(AUTH_STORAGE_KEY) || "").trim();
+    } catch (error) {
+      token = "";
+    }
+
+    try {
+      const raw = window.localStorage.getItem(AUTH_USER_STORAGE_KEY) || "";
+      if (raw) {
+        user = authNormalizeUser(JSON.parse(raw));
+      }
+    } catch (error) {
+      user = null;
+    }
+
+    state.auth.token = token;
+    state.auth.user = user;
+    state.auth.loginOpen = !token;
+    state.auth.loginBusy = false;
+    state.auth.loginError = "";
+    state.auth.sessionChecking = false;
+  }
+
+  function authSaveSessionCache() {
+    try {
+      if (state.auth.token) {
+        window.localStorage.setItem(AUTH_STORAGE_KEY, state.auth.token);
+      } else {
+        window.localStorage.removeItem(AUTH_STORAGE_KEY);
+      }
+    } catch (error) {
+      console.warn("Failed to save auth token", error);
+    }
+
+    try {
+      if (state.auth.user) {
+        window.localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(state.auth.user));
+      } else {
+        window.localStorage.removeItem(AUTH_USER_STORAGE_KEY);
+      }
+    } catch (error) {
+      console.warn("Failed to save auth user cache", error);
+    }
+  }
+
+  function authSetLoginState(patch = {}) {
+    Object.assign(state.auth, patch || {});
+    authRenderHeader();
+    authRenderLoginOverlay();
+  }
+
+  function authRenderHeader() {
+    if (dom.authDisplayName) {
+      dom.authDisplayName.textContent = state.auth.user && state.auth.user.displayName ? state.auth.user.displayName : "-";
+    }
+    if (dom.authRoleBadge) {
+      const role = authGetRole();
+      dom.authRoleBadge.textContent = role;
+      dom.authRoleBadge.dataset.role = role;
+    }
+
+    const loggedIn = authIsLoggedIn();
+    if (dom.authUserBox) {
+      dom.authUserBox.classList.toggle("hidden", !loggedIn);
+    }
+    if (dom.btnAuthLogout) {
+      dom.btnAuthLogout.classList.toggle("hidden", !loggedIn);
+      dom.btnAuthLogout.disabled = Boolean(state.auth.loginBusy);
+    }
+    if (dom.btnOpenUserMgmt) {
+      dom.btnOpenUserMgmt.classList.toggle("hidden", !(loggedIn && authIsAdmin()));
+    }
+  }
+
+  function authRenderLoginOverlay() {
+    if (!dom.authLoginOverlay) return;
+
+    const isOpen = Boolean(state.auth.loginOpen);
+    dom.authLoginOverlay.classList.toggle("hidden", !isOpen);
+    dom.authLoginOverlay.setAttribute("aria-hidden", String(!isOpen));
+    syncBodyScrollLock();
+
+    if (dom.btnAuthLogin) {
+      dom.btnAuthLogin.disabled = Boolean(state.auth.loginBusy);
+      if (!dom.btnAuthLogin.dataset.defaultLabel) {
+        dom.btnAuthLogin.dataset.defaultLabel = dom.btnAuthLogin.textContent || "เข้าสู่ระบบ";
+      }
+      dom.btnAuthLogin.textContent = state.auth.loginBusy
+        ? (state.auth.sessionChecking ? "กำลังตรวจสอบ..." : "กำลังเข้าสู่ระบบ...")
+        : (dom.btnAuthLogin.dataset.defaultLabel || "เข้าสู่ระบบ");
+    }
+    if (dom.authUsername) dom.authUsername.disabled = Boolean(state.auth.loginBusy || state.auth.sessionChecking);
+    if (dom.authPassword) dom.authPassword.disabled = Boolean(state.auth.loginBusy || state.auth.sessionChecking);
+
+    if (dom.authLoginError) {
+      const message = String(state.auth.loginError || "");
+      dom.authLoginError.textContent = message;
+      dom.authLoginError.classList.toggle("hidden", !message);
+    }
+  }
+
+  function authGetToken() {
+    return String(state.auth.token || "").trim();
+  }
+
+  function authIsLoggedIn() {
+    return Boolean(authGetToken() && state.auth.user);
+  }
+
+  function authGetRole() {
+    return String((state.auth.user && state.auth.user.role) || "USER").toUpperCase() === "ADMIN" ? "ADMIN" : "USER";
+  }
+
+  function authIsAdmin() {
+    return authGetRole() === "ADMIN";
+  }
+
+  function authBuildHeaders(baseHeaders = {}) {
+    const headers = { ...(baseHeaders || {}) };
+    const token = authGetToken();
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    return headers;
+  }
+
+  function authIsUnauthorizedMessage(message, statusCode = 0) {
+    if (Number(statusCode) === 401 || Number(statusCode) === 403) return true;
+    const msg = String(message || "");
+    return /unauthorized|session invalid|session expired|invalid session|หมดอายุ|ไม่ได้รับอนุญาต/i.test(msg);
+  }
+
+  async function authHandleUnauthorized(message) {
+    if (!authGetToken()) return;
+    if (state.auth.handlingUnauthorized) return;
+
+    state.auth.handlingUnauthorized = true;
+    try {
+      await authLogout({ source: "unauthorized", skipApi: true, silent: true, loginError: "Session หมดอายุ กรุณาเข้าสู่ระบบใหม่" });
+      showToast("warn", "Session หมดอายุ กรุณาเข้าสู่ระบบใหม่");
+    } finally {
+      state.auth.handlingUnauthorized = false;
+    }
+  }
+
+  function authExtractSessionToken(response) {
+    return String(
+      coalesce(
+        response && response.sessionToken,
+        response && response.token,
+        response && response.accessToken,
+        response && response.data && response.data.sessionToken,
+        response && response.data && response.data.token,
+        response && response.result && response.result.sessionToken,
+        response && response.result && response.result.token,
+        ""
+      ) || ""
+    ).trim();
+  }
+
+  function authExtractUserFromResponse(response) {
+    const candidate =
+      (response && response.user) ||
+      (response && response.me) ||
+      (response && response.item) ||
+      (response && response.data && (response.data.user || response.data.me || response.data.item)) ||
+      (response && response.result && (response.result.user || response.result.me || response.result.item)) ||
+      (response && response.data && typeof response.data === "object" && !Array.isArray(response.data) ? response.data : null) ||
+      (response && response.result && typeof response.result === "object" && !Array.isArray(response.result) ? response.result : null);
+
+    return authNormalizeUser(candidate);
+  }
+
+  function authExtractUsers(response) {
+    const candidates = [
+      response && response.users,
+      response && response.items,
+      response && response.data && response.data.users,
+      response && response.data && response.data.items,
+      response && response.result && response.result.users,
+      response && response.result && response.result.items,
+      response && response.data,
+      response && response.result,
+    ];
+
+    for (const candidate of candidates) {
+      if (!Array.isArray(candidate)) continue;
+      return candidate.map(authNormalizeUser).filter(Boolean);
+    }
+    return [];
+  }
+
+  async function authInitializeSession() {
+    if (!authGetToken()) {
+      authSetLoginState({ loginOpen: true, loginBusy: false, sessionChecking: false, loginError: "" });
+      return false;
+    }
+
+    authSetLoginState({ loginOpen: true, loginBusy: true, sessionChecking: true, loginError: "" });
+    try {
+      const meResponse = await apiGet("getMe");
+      const me = authExtractUserFromResponse(meResponse);
+      if (!me) {
+        throw new Error("ไม่พบข้อมูลผู้ใช้จาก session");
+      }
+
+      state.auth.user = me;
+      state.auth.loginOpen = false;
+      state.auth.loginBusy = false;
+      state.auth.sessionChecking = false;
+      state.auth.loginError = "";
+      authSaveSessionCache();
+      authRenderHeader();
+      authRenderLoginOverlay();
+      void authLoadUsers();
+      return true;
+    } catch (error) {
+      if (state.auth.handlingUnauthorized) return false;
+      await authLogout({ source: "startup-invalid-session", skipApi: true, silent: true, loginError: "Session ไม่ถูกต้องหรือหมดอายุ" });
+      return false;
+    }
+  }
+
+  async function authHandleLoginSubmit(event) {
+    event.preventDefault();
+    if (state.auth.loginBusy) return;
+    if (!isApiConfigured()) {
+      authSetLoginState({ loginOpen: true, loginError: "ยังไม่ได้ตั้งค่า API_BASE" });
+      return;
+    }
+
+    const username = String((dom.authUsername && dom.authUsername.value) || "").trim();
+    const password = String((dom.authPassword && dom.authPassword.value) || "");
+    if (!username || !password) {
+      authSetLoginState({ loginOpen: true, loginError: "กรุณากรอก username และ password" });
+      return;
+    }
+
+    authSetLoginState({ loginOpen: true, loginBusy: true, sessionChecking: false, loginError: "" });
+    try {
+      const loginResponse = await apiPost("login", { username, password });
+      const sessionToken = authExtractSessionToken(loginResponse);
+      if (!sessionToken) {
+        throw new Error("API login ไม่ส่ง sessionToken กลับมา");
+      }
+
+      state.auth.token = sessionToken;
+      state.auth.user = authExtractUserFromResponse(loginResponse);
+      authSaveSessionCache();
+
+      if (!state.auth.user) {
+        const meResponse = await apiGet("getMe");
+        state.auth.user = authExtractUserFromResponse(meResponse);
+      }
+      if (!state.auth.user) {
+        throw new Error("ไม่สามารถโหลดข้อมูลผู้ใช้ปัจจุบันได้");
+      }
+
+      authSaveSessionCache();
+      authSetLoginState({ loginOpen: false, loginBusy: false, sessionChecking: false, loginError: "" });
+      if (dom.authPassword) dom.authPassword.value = "";
+      await authStartAppFlow({ reason: "login-success" });
+      showToast("success", `เข้าสู่ระบบแล้ว (${state.auth.user.displayName})`);
+    } catch (error) {
+      state.auth.token = "";
+      state.auth.user = null;
+      authSaveSessionCache();
+      authSetLoginState({
+        loginOpen: true,
+        loginBusy: false,
+        sessionChecking: false,
+        loginError: getErrorMessage(error) || "เข้าสู่ระบบไม่สำเร็จ",
+      });
+    }
+  }
+
+  async function authStartAppFlow(options = {}) {
+    if (!authIsLoggedIn()) {
+      authSetLoginState({ loginOpen: true });
+      return;
+    }
+
+    if (!state.auth.appStarted) {
+      await bootstrap();
+      state.auth.appStarted = true;
+    } else {
+      await Promise.allSettled([checkApiHealth(), refreshPendingNotes(), refreshDoneNotes()]);
+    }
+
+    void authLoadUsers();
+    void processSyncQueue({ reason: options.reason || "auth-start-app" });
+  }
+
+  async function authLoadUsers() {
+    if (!authIsLoggedIn()) {
+      state.auth.users = [];
+      userFilterRenderUserOptions();
+      return;
+    }
+
+    try {
+      const response = await apiGet("getUsers");
+      const users = authExtractUsers(response);
+      const currentUser = authNormalizeUser(state.auth.user);
+      const mergedMap = new Map();
+      if (currentUser) {
+        mergedMap.set(String(currentUser.userId), currentUser);
+      }
+      users.forEach((user) => {
+        if (!user) return;
+        mergedMap.set(String(user.userId), user);
+      });
+      state.auth.users = Array.from(mergedMap.values()).sort((a, b) =>
+        String(a.displayName || "").localeCompare(String(b.displayName || ""), "th")
+      );
+    } catch (error) {
+      console.warn("getUsers failed", error);
+      state.auth.users = state.auth.user ? [state.auth.user] : [];
+    } finally {
+      userFilterRenderUserOptions();
+    }
+  }
+
+  async function authLogout(options = {}) {
+    const source = String(options.source || "");
+    const token = authGetToken();
+
+    if (token && !options.skipApi) {
+      try {
+        await fetch(API_BASE, {
+          method: "POST",
+          headers: authBuildHeaders({
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          }),
+          body: JSON.stringify({ action: "logout" }),
+        });
+      } catch (error) {
+        if (!options.silent) {
+          console.warn("logout request failed", error);
+        }
+      }
+    }
+
+    clearSyncRetryTimer();
+    state.sync.processing = false;
+
+    state.auth = {
+      ...authGetDefaultStatePatch(),
+      handlingUnauthorized: state.auth.handlingUnauthorized,
+      loginError: String(options.loginError || ""),
+    };
+    authSaveSessionCache();
+    authRenderHeader();
+    authRenderLoginOverlay();
+    userFilterRenderUserOptions();
+
+    state.rawPendingNotes = [];
+    state.rawDoneNotes = [];
+    state.pendingNotes = [];
+    state.doneNotes = [];
+    state.errors.pending = "";
+    state.errors.done = "";
+    state.loading.pending = false;
+    state.loading.done = false;
+    setApiStatus("warn", "API: กรุณาเข้าสู่ระบบ");
+    rebuildVisibleNotesFromSources();
+    renderList("pending");
+    renderList("done");
+
+    if (dom.authPassword) dom.authPassword.value = "";
+
+    if (!options.silent && source === "manual") {
+      showToast("success", "ออกจากระบบแล้ว");
+    }
+  }
+  // === AUTH PATCH END ===
+
+  // === USER FILTER PATCH START ===
+  function userFilterNormalizeMode(value) {
+    const mode = String(value || "").trim().toUpperCase();
+    if (mode === "CREATED" || mode === "CHECKED") return mode;
+    return "ANY";
+  }
+
+  function userFilterBuildApiParams(scope) {
+    const isDoneScope = scope === "done";
+    const filters = isDoneScope ? state.filters.done : state.filters.pending;
+    const userId = String((filters && filters.userId) || "").trim();
+    if (!userId) return {};
+
+    const userFilterMode = userFilterNormalizeMode(filters.userFilterMode);
+    const params = {
+      userId,
+      userFilterMode,
+    };
+    if (userFilterMode === "CREATED") {
+      params.createdByUserId = userId;
+    } else if (userFilterMode === "CHECKED") {
+      params.checkedByUserId = userId;
+    }
+    return params;
+  }
+
+  function userFilterRenderUserOptions() {
+    const pendingSelectedUserId = String((state.filters.pending && state.filters.pending.userId) || "");
+    const doneSelectedUserId = String((state.filters.done && state.filters.done.userId) || "");
+    const pendingMode = userFilterNormalizeMode(state.filters.pending.userFilterMode);
+    const doneMode = userFilterNormalizeMode(state.filters.done.userFilterMode);
+
+    const users = Array.isArray(state.auth.users) ? state.auth.users : [];
+    const optionHtml = users
+      .map((user) => {
+        const value = escapeAttribute(String(user.userId || ""));
+        const label = escapeHtml(String(user.displayName || user.username || user.userId || "-"));
+        const role = escapeHtml(String(user.role || "USER"));
+        return `<option value="${value}">${label} (${role})</option>`;
+      })
+      .join("");
+
+    if (dom.pendingUserId) {
+      dom.pendingUserId.innerHTML = `<option value="">ทุกคน</option>${optionHtml}`;
+      dom.pendingUserId.value = pendingSelectedUserId;
+      if (dom.pendingUserId.value !== pendingSelectedUserId) {
+        dom.pendingUserId.value = "";
+        state.filters.pending.userId = "";
+      }
+    }
+    if (dom.historyUserId) {
+      dom.historyUserId.innerHTML = `<option value="">ทุกคน</option>${optionHtml}`;
+      dom.historyUserId.value = doneSelectedUserId;
+      if (dom.historyUserId.value !== doneSelectedUserId) {
+        dom.historyUserId.value = "";
+        state.filters.done.userId = "";
+      }
+    }
+    if (dom.pendingUserFilterMode) dom.pendingUserFilterMode.value = pendingMode;
+    if (dom.historyUserFilterMode) dom.historyUserFilterMode.value = doneMode;
+
+    renderFilterControls("pending");
+    renderFilterControls("done");
+  }
+  // === USER FILTER PATCH END ===
+
   async function bootstrap() {
     setGlobalLoading(true, "กำลังโหลดข้อมูล NOTE...");
     state.loading.bootstrap = true;
@@ -363,6 +935,11 @@ const imageInflightCache = new Map();
     if (state.loading.refreshAll) return;
     if (!isApiConfigured()) {
       showToast("warn", "ยังไม่ได้ตั้งค่า API_BASE");
+      return;
+    }
+    if (!authIsLoggedIn()) {
+      showToast("warn", "กรุณาเข้าสู่ระบบก่อน");
+      authSetLoginState({ loginOpen: true });
       return;
     }
 
@@ -402,7 +979,7 @@ const imageInflightCache = new Map();
     renderList("pending");
 
     try {
-      const response = await apiGet("getPendingNotes");
+      const response = await apiGet("getPendingNotes", userFilterBuildApiParams("pending"));
       const notes = extractNoteArray(response).map(normalizeNote);
       state.rawPendingNotes = notes
         .filter((note) => note.noteId)
@@ -424,7 +1001,7 @@ const imageInflightCache = new Map();
     renderList("done");
 
     try {
-      const response = await apiGet("getDoneNotes");
+      const response = await apiGet("getDoneNotes", userFilterBuildApiParams("done"));
       const notes = extractNoteArray(response).map(normalizeNote);
       state.rawDoneNotes = notes
         .filter((note) => note.noteId)
@@ -1298,6 +1875,10 @@ const imageInflightCache = new Map();
       renderSyncHeader();
       return;
     }
+    if (!authIsLoggedIn()) {
+      renderSyncHeader();
+      return;
+    }
     if (!state.sync.queue.length) {
       renderSyncHeader();
       return;
@@ -1960,6 +2541,8 @@ const imageInflightCache = new Map();
       Boolean(filters.dateFrom) ||
       Boolean(filters.dateTo) ||
       String(filters.sort || defaultSort) !== defaultSort ||
+      Boolean(filters.userId) ||
+      (Boolean(filters.userId) && userFilterNormalizeMode(filters.userFilterMode) !== "ANY") ||
       (isDoneScope && normalizeDoneHistoryTimeField(filters.timeField) !== defaultDoneTimeField);
 
     button.disabled = !hasActive;
@@ -1974,11 +2557,14 @@ const imageInflightCache = new Map();
     const filters = isDoneScope ? state.filters.done : state.filters.pending;
     const defaultSort = isDoneScope ? "NEWEST" : "OLDEST";
     const defaultDoneTimeField = "CHECKED_AT";
+    const hadUserServerFilter = Boolean(filters.userId);
 
     filters.search = "";
     filters.dateFrom = "";
     filters.dateTo = "";
     filters.sort = defaultSort;
+    filters.userFilterMode = "ANY";
+    filters.userId = "";
     if (isDoneScope) {
       filters.timeField = defaultDoneTimeField;
     }
@@ -1989,12 +2575,24 @@ const imageInflightCache = new Map();
       if (dom.historyDateTo) dom.historyDateTo.value = "";
       if (dom.historyTimeField) dom.historyTimeField.value = defaultDoneTimeField;
       if (dom.historySort) dom.historySort.value = defaultSort;
+      if (dom.historyUserFilterMode) dom.historyUserFilterMode.value = "ANY";
+      if (dom.historyUserId) dom.historyUserId.value = "";
+      if (hadUserServerFilter) {
+        void refreshDoneNotes();
+        return;
+      }
       renderList("done");
     } else {
       if (dom.pendingSearch) dom.pendingSearch.value = "";
       if (dom.pendingDateFrom) dom.pendingDateFrom.value = "";
       if (dom.pendingDateTo) dom.pendingDateTo.value = "";
       if (dom.pendingSort) dom.pendingSort.value = defaultSort;
+      if (dom.pendingUserFilterMode) dom.pendingUserFilterMode.value = "ANY";
+      if (dom.pendingUserId) dom.pendingUserId.value = "";
+      if (hadUserServerFilter) {
+        void refreshPendingNotes();
+        return;
+      }
       renderList("pending");
     }
   }
@@ -2370,17 +2968,22 @@ const imageInflightCache = new Map();
     const status = normalizeStatus(detail.status || "PENDING");
     const isPending = status !== "DONE";
     const isLocalOnly = Boolean(detail.__localOnly);
+    const canAdminEditDone = !isPending && authIsAdmin();
+    const canEditInUi = !isLocalOnly && (isPending || canAdminEditDone);
     const createdAt = formatDateTime(detail.createdAt) || "-";
     const createdAtCompact = formatDateTimeCompact(detail.createdAt) || "-";
     const checkedAt = detail.checkedAt ? formatDateTime(detail.checkedAt) : "-";
     const syncMetaText = buildNoteSyncMetaText(detail);
     const imageBlock = renderDetailImageView();
     const shortNoteId = shortenNoteId(detail.noteId || "-");
+    const auditInfoHtml = renderDetailAuditInfo(detail);
 
     let actionsHtml = "";
+    if (canEditInUi) {
+      actionsHtml += `<button type="button" class="btn btn--outline" data-action="modal-enter-edit">แก้ไข</button>`;
+    }
     if (isPending && !isLocalOnly) {
-      actionsHtml += `<button type="button" class="btn btn--outline" data-action="modal-enter-edit">แก้ไข</button>
-        <button type="button" class="btn btn--success" data-action="modal-request-done" data-note-id="${escapeAttribute(detail.noteId || "")}">Checklist เสร็จแล้ว</button>`;
+      actionsHtml += `<button type="button" class="btn btn--success" data-action="modal-request-done" data-note-id="${escapeAttribute(detail.noteId || "")}">Checklist เสร็จแล้ว</button>`;
     }
     if (isPending && isLocalOnly) {
       actionsHtml += `<span class="badge badge--subtle">รอ sync ให้เสร็จก่อน จึงแก้ไข/Checklist ได้</span>`;
@@ -2445,8 +3048,34 @@ const imageInflightCache = new Map();
         </div>
 
         ${secondaryMetaHtml}
+        ${auditInfoHtml}
 
         ${actionsHtml ? `<div class="detail-actions">${actionsHtml}</div>` : ""}
+      </div>
+    `;
+  }
+
+  function renderDetailAuditInfo(detail) {
+    const auditItems = [
+      ["createdBy", detail.createdByDisplayName || detail.createdByUserId || ""],
+      ["checkedBy", detail.checkedByDisplayName || detail.checkedByUserId || ""],
+      ["updatedBy", detail.updatedByDisplayName || detail.updatedByUserId || ""],
+    ].filter(([, value]) => String(value || "").trim());
+
+    if (!auditItems.length) return "";
+
+    return `
+      <div class="detail-meta-strip detail-meta-strip--secondary ${auditItems.length >= 2 ? "detail-meta-strip--2" : ""}">
+        ${auditItems
+          .map(
+            ([label, value]) => `
+              <div class="detail-meta-card">
+                <span class="detail-meta-card__label">${escapeHtml(label)}</span>
+                <div class="detail-meta-card__value" title="${escapeAttribute(String(value))}">${escapeHtml(String(value))}</div>
+              </div>
+            `
+          )
+          .join("")}
       </div>
     `;
   }
@@ -2510,7 +3139,7 @@ const imageInflightCache = new Map();
   function enterNoteEditMode() {
     const detail = state.noteModal.detail;
     if (!detail) return;
-    if (normalizeStatus(detail.status || "PENDING") === "DONE") return;
+    if (normalizeStatus(detail.status || "PENDING") === "DONE" && !authIsAdmin()) return;
 
     state.noteModal.mode = "edit";
     state.noteModal.editDraft = {
@@ -2541,6 +3170,7 @@ const imageInflightCache = new Map();
 
     const imagePanel = renderEditImagePanel(detail, draft);
     const busy = Boolean(state.noteModal.saving || draft.compressing);
+    const canEditDoneImage = normalizeStatus(detail.status || "PENDING") !== "DONE" || authIsAdmin();
 
     return `
       <div class="note-detail">
@@ -2556,7 +3186,7 @@ const imageInflightCache = new Map();
           </label>
 
           <div class="field">
-            <span class="field__label">รูปภาพ (แก้ไขได้เฉพาะ Pending)</span>
+            <span class="field__label">รูปภาพ ${canEditDoneImage ? "(แก้ไขได้)" : "(แก้ไขได้เฉพาะ Pending)"}</span>
             <input id="modal-edit-image-input" type="file" accept="image/*" class="hidden-input" ${busy ? "disabled" : ""}>
             <div class="edit-form__image-actions">
               <button type="button" class="btn btn--outline btn--sm" data-action="modal-open-edit-camera" ${busy ? "disabled" : ""}>
@@ -2972,7 +3602,7 @@ const imageInflightCache = new Map();
 
   function syncBodyScrollLock() {
     const shouldLock =
-      state.sidebar.open || state.noteModal.open || state.confirm.open || state.addPage.open || state.camera.open;
+      state.sidebar.open || state.noteModal.open || state.confirm.open || state.addPage.open || state.camera.open || state.auth.loginOpen;
     dom.body.classList.toggle("no-scroll", shouldLock);
   }
 
@@ -3004,7 +3634,7 @@ const imageInflightCache = new Map();
 
     return requestJson(url.toString(), {
       method: "GET",
-      headers: { Accept: "application/json" },
+      headers: authBuildHeaders({ Accept: "application/json" }),
     });
   }
 
@@ -3016,10 +3646,10 @@ const imageInflightCache = new Map();
 
     return requestJson(API_BASE, {
       method: "POST",
-      headers: {
+      headers: authBuildHeaders({
         "Content-Type": "application/json",
         Accept: "application/json",
-      },
+      }),
       body: JSON.stringify(requestBody),
     });
   }
@@ -3050,7 +3680,11 @@ const imageInflightCache = new Map();
     }
 
     if (!response.ok) {
-      throw new Error(extractApiError(parsed) || `HTTP ${response.status}`);
+      const message = extractApiError(parsed) || `HTTP ${response.status}`;
+      if (authIsUnauthorizedMessage(message, response.status)) {
+        void authHandleUnauthorized(message);
+      }
+      throw new Error(message);
     }
 
     if (parsed && typeof parsed === "object") {
@@ -3061,7 +3695,11 @@ const imageInflightCache = new Map();
         parsed.error === true;
 
       if (explicitFailure) {
-        throw new Error(extractApiError(parsed) || "API ตอบกลับ error");
+        const message = extractApiError(parsed) || "API ตอบกลับ error";
+        if (authIsUnauthorizedMessage(message, response.status)) {
+          void authHandleUnauthorized(message);
+        }
+        throw new Error(message);
       }
     }
 
@@ -3148,6 +3786,18 @@ const imageInflightCache = new Map();
       status: normalizeStatus(coalesce(source.status, source.noteStatus, source.state, "")),
       createdAt: coalesce(source.createdAt, source.createdDate, source.created_date, source.timestamp, ""),
       checkedAt: coalesce(source.checkedAt, source.doneAt, source.completedAt, source.checked_date, ""),
+      createdByUserId: String(coalesce(source.createdByUserId, source.created_by_user_id, source.createdBy, "") || ""),
+      checkedByUserId: String(coalesce(source.checkedByUserId, source.checked_by_user_id, source.checkedBy, "") || ""),
+      updatedByUserId: String(coalesce(source.updatedByUserId, source.updated_by_user_id, source.updatedBy, "") || ""),
+      createdByDisplayName: String(
+        coalesce(source.createdByDisplayName, source.created_by_display_name, source.createdByName, "") || ""
+      ),
+      checkedByDisplayName: String(
+        coalesce(source.checkedByDisplayName, source.checked_by_display_name, source.checkedByName, "") || ""
+      ),
+      updatedByDisplayName: String(
+        coalesce(source.updatedByDisplayName, source.updated_by_display_name, source.updatedByName, "") || ""
+      ),
       imageFileId: String(
         coalesce(
           source.imageFileId,

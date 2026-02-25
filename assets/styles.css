@@ -106,7 +106,8 @@ img {
   grid-template-areas:
     "brand actions"
     "api api"
-    "sync sync";
+    "sync sync"
+    "auth auth";
   gap: 6px 8px;
   align-items: center;
   min-height: var(--topbar-height);
@@ -182,6 +183,57 @@ img {
 
 #sync-status {
   grid-area: sync;
+}
+
+.topbar__auth {
+  grid-area: auth;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.topbar__auth-texts {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.topbar__auth-name {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.95);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar__auth-role {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #dbeafe;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.topbar__auth-role[data-role="ADMIN"] {
+  color: #bff8ea;
+  border-color: rgba(14, 165, 160, 0.28);
+  background: rgba(14, 165, 160, 0.14);
 }
 
 .topbar__status > span:last-child {
@@ -1351,6 +1403,65 @@ textarea.is-invalid {
   color: var(--navy);
 }
 
+.auth-login-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 14px;
+}
+
+.auth-login-overlay__backdrop {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(9, 24, 43, 0.55), rgba(9, 24, 43, 0.45)),
+    radial-gradient(circle at 15% 10%, rgba(21, 101, 216, 0.25), transparent 48%),
+    radial-gradient(circle at 85% 15%, rgba(14, 165, 160, 0.18), transparent 42%);
+  backdrop-filter: blur(6px);
+}
+
+.auth-login-card {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 420px);
+  border-radius: 18px;
+  border: 1px solid #dfeaf6;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: var(--shadow);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.auth-login-card__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.auth-login-card__header h2 {
+  font-size: 1rem;
+  color: var(--navy);
+}
+
+.auth-login-card__header p {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.auth-login-error {
+  margin: 0;
+  border-radius: 10px;
+  border: 1px solid #ffd4de;
+  background: #fff7fa;
+  color: #8d2140;
+  padding: 8px 10px;
+  font-size: 0.82rem;
+}
+
 .spinner {
   width: 16px;
   height: 16px;
@@ -1474,8 +1585,8 @@ textarea.is-invalid {
   .topbar {
     margin: 0 -16px;
     padding: 10px 16px;
-    grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto;
-    grid-template-areas: "brand api sync actions";
+    grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto auto;
+    grid-template-areas: "brand api sync auth actions";
     gap: 12px;
   }
 
@@ -1509,6 +1620,12 @@ textarea.is-invalid {
   .topbar__actions {
     justify-self: end;
     align-self: center;
+  }
+
+  .topbar__auth {
+    justify-self: stretch;
+    min-width: 0;
+    padding: 7px 10px;
   }
 
   .topbar__actions .btn--sm {
