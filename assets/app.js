@@ -60,6 +60,7 @@ const imageInflightCache = new Map();
       saving: false,
       compressing: false,
       image: null,
+      visibleRoleFilters: [],
       visibleToUserIds: [],
     },
     camera: {
@@ -237,6 +238,7 @@ const imageInflightCache = new Map();
     dom.addDescription = document.getElementById("add-description");
     dom.addVisibleUsersField = document.getElementById("add-visible-users-field");
     dom.addVisibleUsersHint = document.getElementById("add-visible-users-hint");
+    dom.addVisibleRoles = document.getElementById("add-visible-roles");
     dom.addVisibleToUserIds = document.getElementById("add-visible-to-user-ids");
     dom.addImageInput = document.getElementById("add-image-input");
     dom.btnAddPickImage = document.getElementById("btn-add-pick-image");
@@ -405,9 +407,24 @@ const imageInflightCache = new Map();
     dom.addNoteForm.addEventListener("submit", handleAddNoteSubmit);
     dom.addTitle.addEventListener("input", () => dom.addTitle.classList.remove("is-invalid"));
     dom.addDescription.addEventListener("input", () => dom.addDescription.classList.remove("is-invalid"));
+    if (dom.addVisibleRoles) {
+      dom.addVisibleRoles.addEventListener("change", () => {
+        const allowedRoles = getAllowedVisibilityRolesForCurrentRole();
+        state.addForm.visibleRoleFilters = normalizeVisibleRoleFiltersInput(
+          getSelectedValuesFromSelect(dom.addVisibleRoles),
+          allowedRoles
+        );
+        renderAddVisibleUsersControl();
+      });
+    }
     if (dom.addVisibleToUserIds) {
       dom.addVisibleToUserIds.addEventListener("change", () => {
-        state.addForm.visibleToUserIds = getSelectedValuesFromSelect(dom.addVisibleToUserIds);
+        const filteredUsers = getFilteredAssignableUsersForRoles(state.addForm.visibleRoleFilters);
+        const selection = readVisibilityUserSelectionFromSelect(dom.addVisibleToUserIds, filteredUsers);
+        state.addForm.visibleToUserIds = selection.userIds;
+        if (selection.usedSelectAll) {
+          renderAddVisibleUsersControl();
+        }
       });
     }
     dom.btnAddPickImage.addEventListener("click", () => dom.addImageInput.click());
@@ -1305,6 +1322,82 @@ const imageInflightCache = new Map();
     return [];
   }
 
+  function getAllowedVisibilityRolesForCurrentRole() {
+    const users = getAssignableUsersForCurrentRole();
+    return uniqueStrings(
+      users
+        .map((user) => String((user && user.role) || "USER").toUpperCase())
+        .filter((role) => role && role !== "ADMIN")
+    );
+  }
+
+  function normalizeVisibleRoleFiltersInput(values, allowedRolesInput) {
+    const allowedRoles = Array.isArray(allowedRolesInput)
+      ? allowedRolesInput
+      : getAllowedVisibilityRolesForCurrentRole();
+    const allowedSet = new Set((allowedRoles || []).map((r) => String(r || "").toUpperCase()));
+    const normalized = uniqueStrings((values || []).map((r) => String(r || "").trim().toUpperCase()).filter(Boolean))
+      .filter((role) => allowedSet.has(role));
+    return normalized.length ? normalized : allowedRoles.slice();
+  }
+
+  function getFilteredAssignableUsersForRoles(selectedRoles) {
+    const users = getAssignableUsersForCurrentRole();
+    const roleSet = new Set(normalizeVisibleRoleFiltersInput(selectedRoles));
+    if (!roleSet.size) return users;
+    return users.filter((user) => roleSet.has(String((user && user.role) || "USER").toUpperCase()));
+  }
+
+  function buildVisibilityRoleOptionsHtml(selectedRoles, allowedRoles) {
+    const selected = new Set(normalizeVisibleRoleFiltersInput(selectedRoles, allowedRoles));
+    return (allowedRoles || [])
+      .map((role) => {
+        const label = role === "USER" ? "USER" : role === "SUPERVISOR" ? "SUPERVISOR" : role;
+        return `<option value="${escapeAttribute(role)}"${selected.has(role) ? " selected" : ""}>${escapeHtml(label)}</option>`;
+      })
+      .join("");
+  }
+
+  function buildVisibilityUserOptionsHtml(users, selectedUserIds = []) {
+    const safeUsers = Array.isArray(users) ? users : [];
+    const selected = new Set(normalizeVisibleUserIdsInput(selectedUserIds));
+    const allValue = "__ALL_VISIBLE_USERS__";
+    const allLabel = safeUsers.length ? `ทั้งหมด (${safeUsers.length} คน)` : "ทั้งหมด";
+    const allOption = `<option value="${allValue}">${escapeHtml(allLabel)}</option>`;
+    const userOptions = safeUsers
+      .map((user) => {
+        const uid = String(user.userId || "");
+        const label = `${user.displayName || user.username || uid} (${user.role || "USER"})`;
+        return `<option value="${escapeAttribute(uid)}"${selected.has(uid) ? " selected" : ""}>${escapeHtml(label)}</option>`;
+      })
+      .join("");
+    return `${allOption}${userOptions}`;
+  }
+
+  function readVisibilityUserSelectionFromSelect(selectEl, filteredUsers) {
+    const raw = getSelectedValuesFromSelect(selectEl);
+    const allowedIds = new Set((filteredUsers || []).map((u) => String((u && u.userId) || "")));
+    const usedSelectAll = raw.includes("__ALL_VISIBLE_USERS__");
+    const userIds = usedSelectAll
+      ? Array.from(allowedIds)
+      : normalizeVisibleUserIdsInput(raw).filter((id) => allowedIds.has(id));
+    return { userIds, usedSelectAll };
+  }
+
+  function deriveVisibleRoleFiltersFromUserIds(userIds) {
+    const selectedIds = new Set(normalizeVisibleUserIdsInput(userIds));
+    const allowedRoles = getAllowedVisibilityRolesForCurrentRole();
+    if (!selectedIds.size) return allowedRoles.slice();
+
+    const matchedRoles = uniqueStrings(
+      getAssignableUsersForCurrentRole()
+        .filter((user) => selectedIds.has(String(user.userId || "")))
+        .map((user) => String(user.role || "USER").toUpperCase())
+        .filter((role) => role !== "ADMIN")
+    );
+    return normalizeVisibleRoleFiltersInput(matchedRoles, allowedRoles);
+  }
+
   function getUserDisplayNameById(userId) {
     const target = String(userId || "");
     if (!target) return "";
@@ -1324,20 +1417,23 @@ const imageInflightCache = new Map();
     const canManage = authCanManageVisibleUsers();
     dom.addVisibleUsersField.classList.toggle("hidden", !canManage);
     if (!canManage) {
+      state.addForm.visibleRoleFilters = [];
       state.addForm.visibleToUserIds = [];
+      if (dom.addVisibleRoles) dom.addVisibleRoles.innerHTML = "";
       dom.addVisibleToUserIds.innerHTML = "";
       return;
     }
 
     const role = authGetRole();
-    const users = getAssignableUsersForCurrentRole();
-    const optionsHtml = users
-      .map((user) => {
-        const label = `${user.displayName || user.username || user.userId} (${user.role || "USER"})`;
-        return `<option value="${escapeAttribute(String(user.userId || ""))}">${escapeHtml(label)}</option>`;
-      })
-      .join("");
-    dom.addVisibleToUserIds.innerHTML = optionsHtml;
+    const allowedRoles = getAllowedVisibilityRolesForCurrentRole();
+    state.addForm.visibleRoleFilters = normalizeVisibleRoleFiltersInput(state.addForm.visibleRoleFilters, allowedRoles);
+    const users = getFilteredAssignableUsersForRoles(state.addForm.visibleRoleFilters);
+
+    if (dom.addVisibleRoles) {
+      dom.addVisibleRoles.innerHTML = buildVisibilityRoleOptionsHtml(state.addForm.visibleRoleFilters, allowedRoles);
+    }
+
+    dom.addVisibleToUserIds.innerHTML = buildVisibilityUserOptionsHtml(users, state.addForm.visibleToUserIds);
     const allowedIds = new Set(users.map((u) => String(u.userId || "")));
     state.addForm.visibleToUserIds = normalizeVisibleUserIdsInput(state.addForm.visibleToUserIds).filter((id) => allowedIds.has(id));
     setSelectedValuesForSelect(dom.addVisibleToUserIds, state.addForm.visibleToUserIds);
@@ -1345,8 +1441,8 @@ const imageInflightCache = new Map();
     if (dom.addVisibleUsersHint) {
       dom.addVisibleUsersHint.textContent =
         role === "SUPERVISOR"
-          ? "SUPERVISOR เลือกได้เฉพาะ USER (ระบบจะรวมผู้สร้างให้อัตโนมัติ)"
-          : "ADMIN เลือกได้ทุก role (ระบบจะรวมผู้สร้างให้อัตโนมัติ)";
+          ? "เลือก role ก่อน แล้วเลือกผู้ใช้ (ADMIN จะเห็นทุก NOTE เสมอ และระบบจะรวมผู้สร้างให้อัตโนมัติ)"
+          : "ADMIN จะเห็นทุก NOTE เสมอ (ไม่ต้องเลือก ADMIN) และระบบจะรวมผู้สร้างให้อัตโนมัติ";
     }
   }
 
@@ -2933,8 +3029,11 @@ const imageInflightCache = new Map();
       clearAddFormImage({ silent: true });
       dom.addTitle.classList.remove("is-invalid");
       dom.addDescription.classList.remove("is-invalid");
+      state.addForm.visibleRoleFilters = [];
       state.addForm.visibleToUserIds = [];
+      if (dom.addVisibleRoles) setSelectedValuesForSelect(dom.addVisibleRoles, []);
       if (dom.addVisibleToUserIds) setSelectedValuesForSelect(dom.addVisibleToUserIds, []);
+      renderAddVisibleUsersControl();
 
       closeAddPage({ force: true });
       void processSyncQueue({ reason: "create-note-submit" });
@@ -3955,6 +4054,7 @@ const imageInflightCache = new Map();
     state.noteModal.editDraft = {
       title: detail.title || "",
       description: detail.description || "",
+      visibleRoleFilters: deriveVisibleRoleFiltersFromUserIds(detail.visibleToUserIds),
       visibleToUserIds: normalizeVisibleUserIdsInput(detail.visibleToUserIds),
       newImage: null,
       removeImage: false,
@@ -3974,6 +4074,7 @@ const imageInflightCache = new Map();
     const draft = state.noteModal.editDraft || {
       title: detail.title || "",
       description: detail.description || "",
+      visibleRoleFilters: deriveVisibleRoleFiltersFromUserIds(detail.visibleToUserIds),
       visibleToUserIds: normalizeVisibleUserIdsInput(detail.visibleToUserIds),
       newImage: null,
       removeImage: false,
@@ -3984,18 +4085,29 @@ const imageInflightCache = new Map();
     const busy = Boolean(state.noteModal.saving || draft.compressing);
     const canEditDoneImage = normalizeStatus(detail.status || "PENDING") !== "DONE" || authIsAdmin();
     const canManageVisibility = authCanManageVisibleUsers() && detail.canManageVisibility !== false;
-    const visibleOptionsHtml = renderAssignableUserOptionsHtml(draft.visibleToUserIds);
+    const allowedRoles = getAllowedVisibilityRolesForCurrentRole();
+    const normalizedRoleFilters = normalizeVisibleRoleFiltersInput(draft.visibleRoleFilters, allowedRoles);
+    if (!Array.isArray(draft.visibleRoleFilters) || draft.visibleRoleFilters.join("|") !== normalizedRoleFilters.join("|")) {
+      draft.visibleRoleFilters = normalizedRoleFilters;
+    }
+    const filteredVisibleUsers = getFilteredAssignableUsersForRoles(draft.visibleRoleFilters);
+    const visibleOptionsHtml = buildVisibilityUserOptionsHtml(filteredVisibleUsers, draft.visibleToUserIds);
+    const visibleRoleOptionsHtml = buildVisibilityRoleOptionsHtml(draft.visibleRoleFilters, allowedRoles);
     const visibilityFieldHtml = canManageVisibility
       ? `
           <label class="field">
             <span class="field__label">ผู้ใช้ที่มองเห็น NOTE</span>
+            <select id="modal-edit-visible-roles" class="select-multiple" multiple ${busy ? "disabled" : ""}>
+              ${visibleRoleOptionsHtml}
+            </select>
+            <p class="edit-note">เลือก role ก่อน (เลือกได้มากกว่า 1)</p>
             <select id="modal-edit-visible-users" class="select-multiple" multiple ${busy ? "disabled" : ""}>
               ${visibleOptionsHtml}
             </select>
             <p class="edit-note">${escapeHtml(
               authIsSupervisor()
-                ? "SUPERVISOR เลือกได้เฉพาะ USER (ระบบจะรวมผู้สร้างให้อัตโนมัติ)"
-                : "ADMIN เลือกได้ทุก role (ระบบจะรวมผู้สร้างให้อัตโนมัติ)"
+                ? "SUPERVISOR เลือกได้เฉพาะ USER (ADMIN เห็นทุก NOTE เสมอ และระบบจะรวมผู้สร้างให้อัตโนมัติ)"
+                : "ADMIN เห็นทุก NOTE เสมอ (ไม่ต้องเลือก ADMIN) และระบบจะรวมผู้สร้างให้อัตโนมัติ"
             )}</p>
           </label>
         `
@@ -4227,6 +4339,26 @@ const imageInflightCache = new Map();
   }
 
   async function handleNoteModalChange(event) {
+    if (event.target && event.target.id === "modal-edit-visible-roles") {
+      syncNoteModalDraftFromInputs();
+      if (state.noteModal.editDraft) {
+        const allowedRoles = getAllowedVisibilityRolesForCurrentRole();
+        state.noteModal.editDraft.visibleRoleFilters = normalizeVisibleRoleFiltersInput(
+          getSelectedValuesFromSelect(event.target),
+          allowedRoles
+        );
+        const filteredUsers = getFilteredAssignableUsersForRoles(state.noteModal.editDraft.visibleRoleFilters);
+        const allowedIds = new Set(filteredUsers.map((u) => String(u.userId || "")));
+        state.noteModal.editDraft.visibleToUserIds = normalizeVisibleUserIdsInput(state.noteModal.editDraft.visibleToUserIds)
+          .filter((id) => allowedIds.has(id));
+      }
+      renderNoteModal();
+      return;
+    }
+    if (event.target && event.target.id === "modal-edit-visible-users") {
+      syncNoteModalDraftFromInputs();
+      return;
+    }
     if (event.target && event.target.id === "modal-edit-image-input") {
       const file = event.target.files && event.target.files[0];
       event.target.value = "";
@@ -4274,11 +4406,23 @@ const imageInflightCache = new Map();
     if (state.noteModal.mode !== "edit" || !state.noteModal.editDraft) return;
     const titleEl = dom.noteModalBody.querySelector("#modal-edit-title");
     const descEl = dom.noteModalBody.querySelector("#modal-edit-description");
+    const visibleRolesEl = dom.noteModalBody.querySelector("#modal-edit-visible-roles");
     const visibleUsersEl = dom.noteModalBody.querySelector("#modal-edit-visible-users");
     if (titleEl) state.noteModal.editDraft.title = titleEl.value;
     if (descEl) state.noteModal.editDraft.description = descEl.value;
+    if (visibleRolesEl) {
+      state.noteModal.editDraft.visibleRoleFilters = normalizeVisibleRoleFiltersInput(
+        getSelectedValuesFromSelect(visibleRolesEl),
+        getAllowedVisibilityRolesForCurrentRole()
+      );
+    }
     if (visibleUsersEl) {
-      state.noteModal.editDraft.visibleToUserIds = getSelectedValuesFromSelect(visibleUsersEl);
+      const filteredUsers = getFilteredAssignableUsersForRoles(state.noteModal.editDraft.visibleRoleFilters);
+      const selection = readVisibilityUserSelectionFromSelect(visibleUsersEl, filteredUsers);
+      state.noteModal.editDraft.visibleToUserIds = selection.userIds;
+      if (selection.usedSelectAll) {
+        renderNoteModal();
+      }
     }
   }
 
