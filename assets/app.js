@@ -1326,7 +1326,6 @@ const imageInflightCache = new Map();
     const role = authGetRole();
     const filters = state.dashboard.filters;
     const selfId = getCurrentUserId();
-    const usersMap = buildUsersMapByIdFromItems_(state.auth.users || []);
 
     if (role === "USER") {
       filters.userId = selfId || "";
