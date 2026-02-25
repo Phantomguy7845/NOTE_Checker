@@ -1932,7 +1932,7 @@ const imageInflightCache = new Map();
       return true;
     });
 
-    filtered.sort((a, b) => compareNotes(a, b, sort));
+    filtered.sort((a, b) => compareNotes(a, b, sort, scope));
     return filtered;
   }
 
@@ -1981,11 +1981,12 @@ const imageInflightCache = new Map();
     }
   }
 
-  function compareNotes(a, b, sort) {
+  function compareNotes(a, b, sort, scope = "pending") {
+    const isDoneScope = scope === "done";
     const aTitle = (a.title || "").toLocaleLowerCase();
     const bTitle = (b.title || "").toLocaleLowerCase();
-    const timeA = toTimestamp(a.createdAt);
-    const timeB = toTimestamp(b.createdAt);
+    const timeA = isDoneScope ? (toTimestamp(a.checkedAt) || toTimestamp(a.createdAt)) : toTimestamp(a.createdAt);
+    const timeB = isDoneScope ? (toTimestamp(b.checkedAt) || toTimestamp(b.createdAt)) : toTimestamp(b.createdAt);
 
     switch (sort) {
       case "NEWEST":
