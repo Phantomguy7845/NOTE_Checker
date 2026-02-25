@@ -60,6 +60,7 @@ const imageInflightCache = new Map();
       saving: false,
       compressing: false,
       image: null,
+      visibleToUserIds: [],
     },
     camera: {
       open: false,
@@ -104,6 +105,22 @@ const imageInflightCache = new Map();
       creating: false,
       error: "",
     },
+    dashboard: {
+      open: false,
+      loading: false,
+      error: "",
+      data: null,
+      filters: {
+        search: "",
+        dateFrom: "",
+        dateTo: "",
+        dateField: "ANY",
+        status: "",
+        userFilterMode: "ANY",
+        userId: "",
+        role: "",
+      },
+    },
     sync: {
       queue: [],
       processing: false,
@@ -147,6 +164,9 @@ const imageInflightCache = new Map();
     authRenderHeader();
     authRenderLoginOverlay();
     userFilterRenderUserOptions();
+    renderAddVisibleUsersControl();
+    dashboardRenderControls();
+    dashboardRender();
     renderAddImagePreview();
     rebuildVisibleNotesFromSources();
     renderList("pending");
@@ -185,6 +205,7 @@ const imageInflightCache = new Map();
     dom.syncStatusText = document.getElementById("sync-status-text");
     dom.btnRefreshAll = document.getElementById("btn-refresh-all");
     dom.btnRetrySync = document.getElementById("btn-retry-sync");
+    dom.btnOpenDashboard = document.getElementById("btn-open-dashboard");
     dom.btnOpenUserMgmt = document.getElementById("btn-open-user-mgmt");
     dom.btnAuthLogout = document.getElementById("btn-auth-logout");
     dom.btnOpenHistory = document.getElementById("btn-open-history");
@@ -206,6 +227,9 @@ const imageInflightCache = new Map();
     dom.addNoteForm = document.getElementById("add-note-form");
     dom.addTitle = document.getElementById("add-title");
     dom.addDescription = document.getElementById("add-description");
+    dom.addVisibleUsersField = document.getElementById("add-visible-users-field");
+    dom.addVisibleUsersHint = document.getElementById("add-visible-users-hint");
+    dom.addVisibleToUserIds = document.getElementById("add-visible-to-user-ids");
     dom.addImageInput = document.getElementById("add-image-input");
     dom.btnAddPickImage = document.getElementById("btn-add-pick-image");
     dom.btnAddOpenCamera = document.getElementById("btn-add-open-camera");
@@ -242,6 +266,30 @@ const imageInflightCache = new Map();
     dom.btnHistoryClearFilters = document.getElementById("btn-history-clear-filters");
     dom.historyCount = document.getElementById("history-count");
     dom.historyList = document.getElementById("history-list");
+
+    dom.dashboardBackdrop = document.getElementById("dashboard-backdrop");
+    dom.dashboardShell = document.getElementById("dashboard-shell");
+    dom.btnCloseDashboard = document.getElementById("btn-close-dashboard");
+    dom.dashboardSearch = document.getElementById("dashboard-search");
+    dom.dashboardDateFrom = document.getElementById("dashboard-date-from");
+    dom.dashboardDateTo = document.getElementById("dashboard-date-to");
+    dom.dashboardDateField = document.getElementById("dashboard-date-field");
+    dom.dashboardStatus = document.getElementById("dashboard-status");
+    dom.dashboardUserFilterMode = document.getElementById("dashboard-user-filter-mode");
+    dom.dashboardUserId = document.getElementById("dashboard-user-id");
+    dom.dashboardRole = document.getElementById("dashboard-role");
+    dom.dashboardUserField = document.getElementById("dashboard-user-field");
+    dom.dashboardRoleField = document.getElementById("dashboard-role-field");
+    dom.btnDashboardClearFilters = document.getElementById("btn-dashboard-clear-filters");
+    dom.btnDashboardRefresh = document.getElementById("btn-dashboard-refresh");
+    dom.dashboardError = document.getElementById("dashboard-error");
+    dom.dashboardTotalNotes = document.getElementById("dashboard-total-notes");
+    dom.dashboardPendingNotes = document.getElementById("dashboard-pending-notes");
+    dom.dashboardDoneNotes = document.getElementById("dashboard-done-notes");
+    dom.dashboardUsersCount = document.getElementById("dashboard-users-count");
+    dom.dashboardByStatus = document.getElementById("dashboard-by-status");
+    dom.dashboardByRole = document.getElementById("dashboard-by-role");
+    dom.dashboardByUser = document.getElementById("dashboard-by-user");
 
     dom.noteModalBackdrop = document.getElementById("note-modal-backdrop");
     dom.noteModalShell = document.getElementById("note-modal-shell");
@@ -297,6 +345,9 @@ const imageInflightCache = new Map();
     dom.btnRetrySync.addEventListener("click", () => {
       void processSyncQueue({ manual: true, reason: "manual-retry" });
     });
+    if (dom.btnOpenDashboard) {
+      dom.btnOpenDashboard.addEventListener("click", () => void openDashboardModal());
+    }
     if (dom.authLoginForm) {
       dom.authLoginForm.addEventListener("submit", (event) => {
         void authHandleLoginSubmit(event);
@@ -317,6 +368,8 @@ const imageInflightCache = new Map();
       dom.btnToggleHistoryFilters.addEventListener("click", toggleHistoryFilters);
     }
     dom.historyBackdrop.addEventListener("click", closeHistoryPanel);
+    if (dom.dashboardBackdrop) dom.dashboardBackdrop.addEventListener("click", closeDashboardModal);
+    if (dom.btnCloseDashboard) dom.btnCloseDashboard.addEventListener("click", closeDashboardModal);
 
     dom.addPageBackdrop.addEventListener("click", () => closeAddPage());
     dom.btnCloseAddPage.addEventListener("click", () => closeAddPage());
@@ -325,6 +378,11 @@ const imageInflightCache = new Map();
     dom.addNoteForm.addEventListener("submit", handleAddNoteSubmit);
     dom.addTitle.addEventListener("input", () => dom.addTitle.classList.remove("is-invalid"));
     dom.addDescription.addEventListener("input", () => dom.addDescription.classList.remove("is-invalid"));
+    if (dom.addVisibleToUserIds) {
+      dom.addVisibleToUserIds.addEventListener("change", () => {
+        state.addForm.visibleToUserIds = getSelectedValuesFromSelect(dom.addVisibleToUserIds);
+      });
+    }
     dom.btnAddPickImage.addEventListener("click", () => dom.addImageInput.click());
     if (dom.btnAddOpenCamera) {
       dom.btnAddOpenCamera.addEventListener("click", () => void openCameraModal("add"));
@@ -411,6 +469,64 @@ const imageInflightCache = new Map();
     }
     dom.btnHistoryClearFilters.addEventListener("click", () => resetFilters("done"));
 
+    if (dom.dashboardSearch) {
+      const handleDashboardSearchRender = debounce(() => {
+        void refreshDashboardSummary({ silent: true });
+      }, CONFIG.searchDebounceMs);
+      dom.dashboardSearch.addEventListener("input", (event) => {
+        state.dashboard.filters.search = String(event.target.value || "").trim();
+        handleDashboardSearchRender();
+      });
+    }
+    if (dom.dashboardDateFrom) {
+      dom.dashboardDateFrom.addEventListener("change", (event) => {
+        state.dashboard.filters.dateFrom = String(event.target.value || "");
+        void refreshDashboardSummary({ silent: true });
+      });
+    }
+    if (dom.dashboardDateTo) {
+      dom.dashboardDateTo.addEventListener("change", (event) => {
+        state.dashboard.filters.dateTo = String(event.target.value || "");
+        void refreshDashboardSummary({ silent: true });
+      });
+    }
+    if (dom.dashboardDateField) {
+      dom.dashboardDateField.addEventListener("change", (event) => {
+        state.dashboard.filters.dateField = dashboardNormalizeDateField(event.target.value);
+        void refreshDashboardSummary({ silent: true });
+      });
+    }
+    if (dom.dashboardStatus) {
+      dom.dashboardStatus.addEventListener("change", (event) => {
+        state.dashboard.filters.status = String(event.target.value || "");
+        void refreshDashboardSummary({ silent: true });
+      });
+    }
+    if (dom.dashboardUserFilterMode) {
+      dom.dashboardUserFilterMode.addEventListener("change", (event) => {
+        state.dashboard.filters.userFilterMode = dashboardNormalizeUserFilterMode(event.target.value);
+        void refreshDashboardSummary({ silent: true });
+      });
+    }
+    if (dom.dashboardUserId) {
+      dom.dashboardUserId.addEventListener("change", (event) => {
+        state.dashboard.filters.userId = String(event.target.value || "");
+        void refreshDashboardSummary({ silent: true });
+      });
+    }
+    if (dom.dashboardRole) {
+      dom.dashboardRole.addEventListener("change", (event) => {
+        state.dashboard.filters.role = dashboardNormalizeRoleFilterValue(event.target.value);
+        void refreshDashboardSummary({ silent: true });
+      });
+    }
+    if (dom.btnDashboardClearFilters) {
+      dom.btnDashboardClearFilters.addEventListener("click", resetDashboardFilters);
+    }
+    if (dom.btnDashboardRefresh) {
+      dom.btnDashboardRefresh.addEventListener("click", () => void refreshDashboardSummary());
+    }
+
     dom.pendingList.addEventListener("click", (event) => handleListClick(event, "pending"));
     dom.historyList.addEventListener("click", (event) => handleListClick(event, "done"));
 
@@ -495,6 +611,7 @@ const imageInflightCache = new Map();
     const username = String(coalesce(raw.username, raw.userName, raw.login, "") || "").trim();
     const displayName = String(coalesce(raw.displayName, raw.name, raw.fullName, username, userId, "") || "").trim();
     const role = String(coalesce(raw.role, raw.userRole, "USER") || "USER").trim().toUpperCase();
+    const isActiveMaybe = toMaybeBoolean(coalesce(raw.isActive, raw.active, raw.is_active, ""));
 
     if (!userId && !username && !displayName) return null;
 
@@ -503,7 +620,8 @@ const imageInflightCache = new Map();
       userId: userId || username || displayName,
       username: username || userId || "",
       displayName: displayName || username || userId || "Unknown",
-      role: role === "ADMIN" ? "ADMIN" : "USER",
+      role: role === "ADMIN" || role === "SUPERVISOR" ? role : "USER",
+      isActive: typeof isActiveMaybe === "boolean" ? isActiveMaybe : true,
     };
   }
 
@@ -553,6 +671,10 @@ const imageInflightCache = new Map();
     if (dom.btnOpenUserMgmt) {
       dom.btnOpenUserMgmt.classList.toggle("hidden", !(loggedIn && authIsAdmin()));
     }
+    if (dom.btnOpenDashboard) {
+      dom.btnOpenDashboard.classList.toggle("hidden", !loggedIn);
+      dom.btnOpenDashboard.disabled = !loggedIn;
+    }
   }
 
   function authRenderLoginOverlay() {
@@ -591,11 +713,17 @@ const imageInflightCache = new Map();
   }
 
   function authGetRole() {
-    return String((state.auth.user && state.auth.user.role) || "USER").toUpperCase() === "ADMIN" ? "ADMIN" : "USER";
+    const role = String((state.auth.user && state.auth.user.role) || "USER").toUpperCase();
+    if (role === "ADMIN" || role === "SUPERVISOR") return role;
+    return "USER";
   }
 
   function authIsAdmin() {
     return authGetRole() === "ADMIN";
+  }
+
+  function authIsSupervisor() {
+    return authGetRole() === "SUPERVISOR";
   }
 
   function authBuildHeaders(baseHeaders = {}) {
@@ -817,6 +945,11 @@ const imageInflightCache = new Map();
       state.auth.users = state.auth.user ? [state.auth.user] : [];
     } finally {
       userFilterRenderUserOptions();
+      renderAddVisibleUsersControl();
+      dashboardRenderControls();
+      if (state.dashboard.open) {
+        void refreshDashboardSummary({ silent: true });
+      }
     }
   }
 
@@ -951,6 +1084,11 @@ const imageInflightCache = new Map();
     authRenderHeader();
     authRenderLoginOverlay();
     userFilterRenderUserOptions();
+    renderAddVisibleUsersControl();
+    state.dashboard.data = null;
+    state.dashboard.error = "";
+    dashboardRenderControls();
+    dashboardRender();
 
     state.rawPendingNotes = [];
     state.rawDoneNotes = [];
@@ -968,6 +1106,9 @@ const imageInflightCache = new Map();
     if (dom.authPassword) dom.authPassword.value = "";
     if (state.userMgmt.open) {
       closeUserMgmtModal({ force: true });
+    }
+    if (state.dashboard.open) {
+      closeDashboardModal();
     }
 
     if (!options.silent && source === "manual") {
@@ -1042,6 +1183,408 @@ const imageInflightCache = new Map();
   }
   // === USER FILTER PATCH END ===
 
+  // === VISIBILITY / DASHBOARD PATCH START ===
+  function getSelectedValuesFromSelect(selectEl) {
+    if (!selectEl) return [];
+    return Array.from(selectEl.selectedOptions || []).map((opt) => String(opt.value || "")).filter(Boolean);
+  }
+
+  function setSelectedValuesForSelect(selectEl, values) {
+    if (!selectEl) return;
+    const selected = new Set((values || []).map((v) => String(v || "")));
+    Array.from(selectEl.options || []).forEach((opt) => {
+      opt.selected = selected.has(String(opt.value || ""));
+    });
+  }
+
+  function normalizeVisibleUserIdsInput(value) {
+    if (Array.isArray(value)) {
+      return uniqueStrings(value.map((v) => String(v || "").trim()).filter(Boolean));
+    }
+    const text = String(value || "").trim();
+    if (!text) return [];
+    if (text.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) {
+          return normalizeVisibleUserIdsInput(parsed);
+        }
+      } catch (error) {
+        // ignore parse error
+      }
+    }
+    return uniqueStrings(text.split(",").map((v) => String(v || "").trim()).filter(Boolean));
+  }
+
+  function uniqueStrings(values) {
+    return Array.from(new Set((values || []).map((v) => String(v || "")).filter(Boolean)));
+  }
+
+  function getCurrentUserId() {
+    return String((state.auth.user && state.auth.user.userId) || "");
+  }
+
+  function getAssignableUsersForCurrentRole() {
+    const role = authGetRole();
+    const users = Array.isArray(state.auth.users) ? state.auth.users : [];
+    if (role === "ADMIN") {
+      return users.filter((user) => user && user.userId && user.isActive !== false);
+    }
+    if (role === "SUPERVISOR") {
+      return users.filter(
+        (user) =>
+          user &&
+          user.userId &&
+          user.isActive !== false &&
+          String(user.role || "USER").toUpperCase() === "USER"
+      );
+    }
+    return [];
+  }
+
+  function getUserDisplayNameById(userId) {
+    const target = String(userId || "");
+    if (!target) return "";
+    const users = Array.isArray(state.auth.users) ? state.auth.users : [];
+    const found = users.find((u) => String((u && u.userId) || "") === target);
+    if (!found) return target;
+    return String(found.displayName || found.username || found.userId || target);
+  }
+
+  function authCanManageVisibleUsers() {
+    return authIsAdmin() || authIsSupervisor();
+  }
+
+  function renderAddVisibleUsersControl() {
+    if (!dom.addVisibleUsersField || !dom.addVisibleToUserIds) return;
+
+    const canManage = authCanManageVisibleUsers();
+    dom.addVisibleUsersField.classList.toggle("hidden", !canManage);
+    if (!canManage) {
+      state.addForm.visibleToUserIds = [];
+      dom.addVisibleToUserIds.innerHTML = "";
+      return;
+    }
+
+    const role = authGetRole();
+    const users = getAssignableUsersForCurrentRole();
+    const optionsHtml = users
+      .map((user) => {
+        const label = `${user.displayName || user.username || user.userId} (${user.role || "USER"})`;
+        return `<option value="${escapeAttribute(String(user.userId || ""))}">${escapeHtml(label)}</option>`;
+      })
+      .join("");
+    dom.addVisibleToUserIds.innerHTML = optionsHtml;
+    const allowedIds = new Set(users.map((u) => String(u.userId || "")));
+    state.addForm.visibleToUserIds = normalizeVisibleUserIdsInput(state.addForm.visibleToUserIds).filter((id) => allowedIds.has(id));
+    setSelectedValuesForSelect(dom.addVisibleToUserIds, state.addForm.visibleToUserIds);
+
+    if (dom.addVisibleUsersHint) {
+      dom.addVisibleUsersHint.textContent =
+        role === "SUPERVISOR"
+          ? "SUPERVISOR เลือกได้เฉพาะ USER (ระบบจะรวมผู้สร้างให้อัตโนมัติ)"
+          : "ADMIN เลือกได้ทุก role (ระบบจะรวมผู้สร้างให้อัตโนมัติ)";
+    }
+  }
+
+  function dashboardGetDefaultFilters() {
+    return {
+      search: "",
+      dateFrom: "",
+      dateTo: "",
+      dateField: "ANY",
+      status: "",
+      userFilterMode: "ANY",
+      userId: "",
+      role: "",
+    };
+  }
+
+  function dashboardNormalizeDateField(value) {
+    const v = String(value || "").trim().toUpperCase();
+    if (v === "CREATED" || v === "CHECKED" || v === "UPDATED") return v;
+    return "ANY";
+  }
+
+  function dashboardNormalizeUserFilterMode(value) {
+    const v = String(value || "").trim().toUpperCase();
+    if (v === "CREATED" || v === "CHECKED" || v === "UPDATED") return v;
+    return "ANY";
+  }
+
+  function dashboardNormalizeRoleFilterValue(value) {
+    const v = String(value || "").trim().toUpperCase();
+    if (v === "USER" || v === "SUPERVISOR" || v === "ADMIN") return v;
+    return "";
+  }
+
+  function dashboardCanOpen() {
+    return authIsLoggedIn();
+  }
+
+  function dashboardApplyRoleRestrictionsToState() {
+    const role = authGetRole();
+    const filters = state.dashboard.filters;
+    const selfId = getCurrentUserId();
+    const usersMap = buildUsersMapByIdFromItems_(state.auth.users || []);
+
+    if (role === "USER") {
+      filters.userId = selfId || "";
+      filters.role = "USER";
+    } else if (role === "SUPERVISOR") {
+      filters.role = "USER";
+      if (filters.userId) {
+        const allowedIds = new Set(getAssignableUsersForCurrentRole().map((u) => String(u.userId || "")));
+        if (!allowedIds.has(String(filters.userId || ""))) {
+          filters.userId = "";
+        }
+      }
+    }
+  }
+
+  function dashboardBuildApiParams() {
+    dashboardApplyRoleRestrictionsToState();
+    const f = state.dashboard.filters;
+    return {
+      search: String(f.search || "").trim(),
+      dateFrom: f.dateFrom || "",
+      dateTo: f.dateTo || "",
+      dateField: dashboardNormalizeDateField(f.dateField),
+      status: String(f.status || "").trim().toUpperCase(),
+      userFilterMode: dashboardNormalizeUserFilterMode(f.userFilterMode),
+      userId: String(f.userId || "").trim(),
+      role: dashboardNormalizeRoleFilterValue(f.role),
+    };
+  }
+
+  function dashboardRenderControls() {
+    if (!dom.dashboardShell) return;
+
+    dashboardApplyRoleRestrictionsToState();
+    const role = authGetRole();
+    const filters = state.dashboard.filters;
+    const users = Array.isArray(state.auth.users) ? state.auth.users : [];
+    const dashboardUsers =
+      role === "ADMIN"
+        ? users.filter((u) => u && u.userId)
+        : role === "SUPERVISOR"
+          ? users.filter((u) => u && u.userId && String(u.role || "USER").toUpperCase() === "USER")
+          : users.filter((u) => u && u.userId && String(u.userId) === getCurrentUserId());
+
+    if (dom.dashboardSearch && dom.dashboardSearch.value !== String(filters.search || "")) {
+      dom.dashboardSearch.value = String(filters.search || "");
+    }
+    if (dom.dashboardDateFrom) dom.dashboardDateFrom.value = String(filters.dateFrom || "");
+    if (dom.dashboardDateTo) dom.dashboardDateTo.value = String(filters.dateTo || "");
+    if (dom.dashboardDateField) dom.dashboardDateField.value = dashboardNormalizeDateField(filters.dateField);
+    if (dom.dashboardStatus) dom.dashboardStatus.value = String(filters.status || "");
+    if (dom.dashboardUserFilterMode) dom.dashboardUserFilterMode.value = dashboardNormalizeUserFilterMode(filters.userFilterMode);
+
+    if (dom.dashboardUserId) {
+      const optionsHtml = dashboardUsers
+        .map((user) => {
+          const label = `${user.displayName || user.username || user.userId} (${user.role || "USER"})`;
+          return `<option value="${escapeAttribute(String(user.userId || ""))}">${escapeHtml(label)}</option>`;
+        })
+        .join("");
+      const defaultLabel = role === "USER" ? "ฉัน" : "ทุกคน";
+      dom.dashboardUserId.innerHTML = `<option value="">${defaultLabel}</option>${optionsHtml}`;
+      dom.dashboardUserId.value = String(filters.userId || "");
+      if (dom.dashboardUserId.value !== String(filters.userId || "")) {
+        state.dashboard.filters.userId = "";
+        dom.dashboardUserId.value = "";
+      }
+    }
+
+    if (dom.dashboardRole) {
+      if (role === "USER") {
+        dom.dashboardRole.innerHTML = `<option value="USER">USER</option>`;
+      } else if (role === "SUPERVISOR") {
+        dom.dashboardRole.innerHTML = `<option value="USER">USER</option>`;
+      } else {
+        dom.dashboardRole.innerHTML = `
+          <option value="">ทุก role</option>
+          <option value="USER">USER</option>
+          <option value="SUPERVISOR">SUPERVISOR</option>
+          <option value="ADMIN">ADMIN</option>
+        `;
+      }
+      dom.dashboardRole.value = dashboardNormalizeRoleFilterValue(state.dashboard.filters.role) || (role === "ADMIN" ? "" : "USER");
+      state.dashboard.filters.role = dom.dashboardRole.value;
+    }
+
+    if (dom.dashboardUserField) {
+      const lockUserField = role === "USER";
+      dom.dashboardUserField.classList.toggle("is-disabled", lockUserField);
+      if (dom.dashboardUserId) dom.dashboardUserId.disabled = lockUserField;
+    }
+    if (dom.dashboardRoleField) {
+      const lockRoleField = role !== "ADMIN";
+      dom.dashboardRoleField.classList.toggle("is-disabled", lockRoleField);
+      if (dom.dashboardRole) dom.dashboardRole.disabled = lockRoleField;
+    }
+
+    if (dom.btnDashboardClearFilters) {
+      const def = dashboardGetDefaultFilters();
+      const userFilterCountsAsActive = role === "USER" ? false : Boolean(filters.userId);
+      const hasActive =
+        Boolean(String(filters.search || "").trim()) ||
+        Boolean(filters.dateFrom) ||
+        Boolean(filters.dateTo) ||
+        dashboardNormalizeDateField(filters.dateField) !== def.dateField ||
+        Boolean(filters.status) ||
+        dashboardNormalizeUserFilterMode(filters.userFilterMode) !== def.userFilterMode ||
+        userFilterCountsAsActive ||
+        Boolean(filters.role && !(role !== "ADMIN" && filters.role === "USER"));
+      dom.btnDashboardClearFilters.disabled = !hasActive;
+      dom.btnDashboardClearFilters.classList.toggle("is-active", hasActive);
+    }
+  }
+
+  function dashboardExtractResponseData(response) {
+    if (!response || typeof response !== "object") return null;
+    if (response.summary) return response;
+    if (response.data && typeof response.data === "object" && response.data.summary) return response.data;
+    if (response.result && typeof response.result === "object" && response.result.summary) return response.result;
+    return null;
+  }
+
+  async function openDashboardModal() {
+    if (!dashboardCanOpen()) {
+      showToast("warn", "กรุณาเข้าสู่ระบบก่อน");
+      return;
+    }
+    if (!dom.dashboardShell || !dom.dashboardBackdrop) {
+      showToast("warn", "Dashboard UI ไม่พร้อมใช้งาน");
+      return;
+    }
+    if (state.dashboard.open) return;
+    state.dashboard.open = true;
+    state.dashboard.error = "";
+    dashboardRenderControls();
+    dashboardRender();
+
+    showModalElements(dom.dashboardBackdrop, dom.dashboardShell);
+    dom.dashboardShell.setAttribute("aria-hidden", "false");
+    dom.dashboardBackdrop.setAttribute("aria-hidden", "false");
+    syncBodyScrollLock();
+
+    await refreshDashboardSummary({ silent: true });
+  }
+
+  function closeDashboardModal() {
+    if (!state.dashboard.open) return;
+    state.dashboard.open = false;
+    hideModalElements(dom.dashboardBackdrop, dom.dashboardShell);
+    dom.dashboardShell.setAttribute("aria-hidden", "true");
+    dom.dashboardBackdrop.setAttribute("aria-hidden", "true");
+    syncBodyScrollLock();
+  }
+
+  async function refreshDashboardSummary(options = {}) {
+    if (!state.dashboard.open && !options.allowClosedRefresh) return;
+    if (!authIsLoggedIn()) return;
+    state.dashboard.loading = true;
+    if (!options.silent) state.dashboard.error = "";
+    dashboardRender();
+
+    try {
+      const response = await apiGet("getDashboardSummary", dashboardBuildApiParams());
+      const data = dashboardExtractResponseData(response);
+      if (!data) throw new Error("รูปแบบข้อมูล Dashboard ไม่ถูกต้อง");
+      state.dashboard.data = data;
+      state.dashboard.error = "";
+    } catch (error) {
+      state.dashboard.error = getErrorMessage(error);
+      if (!options.silent) {
+        showToast("error", `โหลด Dashboard ไม่สำเร็จ: ${state.dashboard.error}`);
+      }
+    } finally {
+      state.dashboard.loading = false;
+      dashboardRender();
+    }
+  }
+
+  function resetDashboardFilters() {
+    state.dashboard.filters = dashboardGetDefaultFilters();
+    dashboardApplyRoleRestrictionsToState();
+    dashboardRenderControls();
+    void refreshDashboardSummary({ silent: true });
+  }
+
+  function dashboardRender() {
+    if (!dom.dashboardShell) return;
+
+    dashboardRenderControls();
+
+    const data = state.dashboard.data || {};
+    const summary = data.summary || {};
+    const breakdown = data.breakdown || {};
+    const loading = Boolean(state.dashboard.loading);
+    const errorText = String(state.dashboard.error || "");
+
+    if (dom.dashboardError) {
+      dom.dashboardError.textContent = errorText;
+      dom.dashboardError.classList.toggle("hidden", !errorText);
+    }
+
+    setDashboardValue(dom.dashboardTotalNotes, loading, summary.totalNotes);
+    setDashboardValue(dom.dashboardPendingNotes, loading, summary.pendingNotes);
+    setDashboardValue(dom.dashboardDoneNotes, loading, summary.doneNotes);
+    setDashboardValue(dom.dashboardUsersCount, loading, summary.usersCount);
+
+    dashboardRenderSimpleList(dom.dashboardByStatus, breakdown.byStatus, loading, (item) => ({
+      label: String(item && item.status || "-"),
+      count: Number(item && item.count || 0),
+      meta: "",
+    }));
+
+    dashboardRenderSimpleList(dom.dashboardByRole, breakdown.byRole, loading, (item) => ({
+      label: String(item && item.role || "-"),
+      count: Number(item && item.count || 0),
+      meta: "",
+    }));
+
+    dashboardRenderSimpleList(dom.dashboardByUser, breakdown.byUser, loading, (item) => ({
+      label: String(item && (item.displayName || item.username || item.userId) || "-"),
+      count: Number(item && item.count || 0),
+      meta: String(item && item.role || ""),
+    }));
+  }
+
+  function setDashboardValue(el, loading, value) {
+    if (!el) return;
+    el.textContent = loading ? "..." : String(value ?? "-");
+  }
+
+  function dashboardRenderSimpleList(listEl, items, loading, mapItem) {
+    if (!listEl) return;
+    if (loading) {
+      listEl.innerHTML = '<li class="list-message">กำลังโหลด...</li>';
+      return;
+    }
+    if (!Array.isArray(items) || !items.length) {
+      listEl.innerHTML = '<li class="list-message">ไม่มีข้อมูล</li>';
+      return;
+    }
+
+    listEl.innerHTML = items
+      .map((item) => {
+        const mapped = mapItem(item || {});
+        return `
+          <li class="dashboard-list__item">
+            <div>
+              <div class="dashboard-list__label">${escapeHtml(String(mapped.label || "-"))}</div>
+              ${mapped.meta ? `<div class="dashboard-list__meta">${escapeHtml(String(mapped.meta))}</div>` : ""}
+            </div>
+            <div class="dashboard-list__count">${escapeHtml(String(mapped.count ?? 0))}</div>
+          </li>
+        `;
+      })
+      .join("");
+  }
+  // === VISIBILITY / DASHBOARD PATCH END ===
+
   async function bootstrap() {
     setGlobalLoading(true, "กำลังโหลดข้อมูล NOTE...");
     state.loading.bootstrap = true;
@@ -1072,7 +1615,11 @@ const imageInflightCache = new Map();
     state.loading.refreshAll = true;
     setButtonBusy(dom.btnRefreshAll, true, "กำลังรีเฟรช...");
     try {
-      await Promise.all([checkApiHealth(), refreshPendingNotes(), refreshDoneNotes()]);
+      const tasks = [checkApiHealth(), refreshPendingNotes(), refreshDoneNotes()];
+      if (state.dashboard.open) {
+        tasks.push(refreshDashboardSummary({ silent: true }));
+      }
+      await Promise.all(tasks);
       showToast("success", "รีเฟรชข้อมูลล่าสุดแล้ว");
     } catch (error) {
       showToast("error", getErrorMessage(error));
@@ -1780,6 +2327,9 @@ const imageInflightCache = new Map();
       if (Object.prototype.hasOwnProperty.call(data, "description")) {
         target.description = decodeDescriptionFromBackend(String(data.description || ""));
       }
+      if (Object.prototype.hasOwnProperty.call(data, "visibleToUserIds")) {
+        target.visibleToUserIds = normalizeVisibleUserIdsInput(data.visibleToUserIds);
+      }
       if (data.removeImage === true && !data.imageDataUrl && !data.imageBase64) {
         target.imageFileId = "";
         target.imageName = "";
@@ -1827,6 +2377,7 @@ const imageInflightCache = new Map();
       noteId: String(item.meta && item.meta.localNoteId || item.id),
       title: String(payload.title || ""),
       description: decodeDescriptionFromBackend(String(payload.description || "")),
+      visibleToUserIds: normalizeVisibleUserIdsInput(payload.visibleToUserIds),
       imageFileId: "",
       imageUrl: "",
       imageMimeType: String(payload.imageMimeType || ""),
@@ -1850,6 +2401,7 @@ const imageInflightCache = new Map();
       noteId: `local-${now.getTime()}-${Math.random().toString(36).slice(2, 7)}`,
       title: String(payload.title || ""),
       description: decodeDescriptionFromBackend(String(payload.description || "")),
+      visibleToUserIds: normalizeVisibleUserIdsInput(payload.visibleToUserIds),
       imageFileId: "",
       imageUrl: "",
       imageMimeType: String(payload.imageMimeType || ""),
@@ -2202,6 +2754,7 @@ const imageInflightCache = new Map();
   function openAddPage() {
     if (state.addPage.open) return;
     state.addPage.open = true;
+    renderAddVisibleUsersControl();
 
     showModalElements(dom.addPageBackdrop, dom.addPageShell);
     dom.addPageShell.setAttribute("aria-hidden", "false");
@@ -2258,6 +2811,15 @@ const imageInflightCache = new Map();
 
     try {
       const payload = { title, description: descriptionForApi };
+      if (authCanManageVisibleUsers()) {
+        const selectedVisibleUserIds = normalizeVisibleUserIdsInput(
+          dom.addVisibleToUserIds ? getSelectedValuesFromSelect(dom.addVisibleToUserIds) : state.addForm.visibleToUserIds
+        );
+        state.addForm.visibleToUserIds = selectedVisibleUserIds;
+        if (selectedVisibleUserIds.length) {
+          payload.visibleToUserIds = selectedVisibleUserIds;
+        }
+      }
       if (state.addForm.image) {
         payload.imageDataUrl = state.addForm.image.dataUrl;
         payload.imageName = state.addForm.image.imageName;
@@ -2279,6 +2841,8 @@ const imageInflightCache = new Map();
       clearAddFormImage({ silent: true });
       dom.addTitle.classList.remove("is-invalid");
       dom.addDescription.classList.remove("is-invalid");
+      state.addForm.visibleToUserIds = [];
+      if (dom.addVisibleToUserIds) setSelectedValuesForSelect(dom.addVisibleToUserIds, []);
 
       closeAddPage({ force: true });
       void processSyncQueue({ reason: "create-note-submit" });
@@ -3095,7 +3659,9 @@ const imageInflightCache = new Map();
     const isPending = status !== "DONE";
     const isLocalOnly = Boolean(detail.__localOnly);
     const canAdminEditDone = !isPending && authIsAdmin();
-    const canEditInUi = !isLocalOnly && (isPending || canAdminEditDone);
+    const canEditByPolicy = typeof detail.canEdit === "boolean" ? detail.canEdit : (isPending || canAdminEditDone);
+    const canChecklistByPolicy = typeof detail.canChecklist === "boolean" ? detail.canChecklist : isPending;
+    const canEditInUi = !isLocalOnly && canEditByPolicy;
     const createdAt = formatDateTime(detail.createdAt) || "-";
     const createdAtCompact = formatDateTimeCompact(detail.createdAt) || "-";
     const checkedAt = detail.checkedAt ? formatDateTime(detail.checkedAt) : "-";
@@ -3108,7 +3674,7 @@ const imageInflightCache = new Map();
     if (canEditInUi) {
       actionsHtml += `<button type="button" class="btn btn--outline" data-action="modal-enter-edit">แก้ไข</button>`;
     }
-    if (isPending && !isLocalOnly) {
+    if (canChecklistByPolicy && !isLocalOnly) {
       actionsHtml += `<button type="button" class="btn btn--success" data-action="modal-request-done" data-note-id="${escapeAttribute(detail.noteId || "")}">Checklist เสร็จแล้ว</button>`;
     }
     if (isPending && isLocalOnly) {
@@ -3265,12 +3831,14 @@ const imageInflightCache = new Map();
   function enterNoteEditMode() {
     const detail = state.noteModal.detail;
     if (!detail) return;
+    if (typeof detail.canEdit === "boolean" && !detail.canEdit) return;
     if (normalizeStatus(detail.status || "PENDING") === "DONE" && !authIsAdmin()) return;
 
     state.noteModal.mode = "edit";
     state.noteModal.editDraft = {
       title: detail.title || "",
       description: detail.description || "",
+      visibleToUserIds: normalizeVisibleUserIdsInput(detail.visibleToUserIds),
       newImage: null,
       removeImage: false,
       compressing: false,
@@ -3289,6 +3857,7 @@ const imageInflightCache = new Map();
     const draft = state.noteModal.editDraft || {
       title: detail.title || "",
       description: detail.description || "",
+      visibleToUserIds: normalizeVisibleUserIdsInput(detail.visibleToUserIds),
       newImage: null,
       removeImage: false,
       compressing: false,
@@ -3297,6 +3866,23 @@ const imageInflightCache = new Map();
     const imagePanel = renderEditImagePanel(detail, draft);
     const busy = Boolean(state.noteModal.saving || draft.compressing);
     const canEditDoneImage = normalizeStatus(detail.status || "PENDING") !== "DONE" || authIsAdmin();
+    const canManageVisibility = authCanManageVisibleUsers() && detail.canManageVisibility !== false;
+    const visibleOptionsHtml = renderAssignableUserOptionsHtml(draft.visibleToUserIds);
+    const visibilityFieldHtml = canManageVisibility
+      ? `
+          <label class="field">
+            <span class="field__label">ผู้ใช้ที่มองเห็น NOTE</span>
+            <select id="modal-edit-visible-users" class="select-multiple" multiple ${busy ? "disabled" : ""}>
+              ${visibleOptionsHtml}
+            </select>
+            <p class="edit-note">${escapeHtml(
+              authIsSupervisor()
+                ? "SUPERVISOR เลือกได้เฉพาะ USER (ระบบจะรวมผู้สร้างให้อัตโนมัติ)"
+                : "ADMIN เลือกได้ทุก role (ระบบจะรวมผู้สร้างให้อัตโนมัติ)"
+            )}</p>
+          </label>
+        `
+      : "";
 
     return `
       <div class="note-detail">
@@ -3310,6 +3896,8 @@ const imageInflightCache = new Map();
             <span class="field__label">รายละเอียด (ไม่บังคับ)</span>
             <textarea id="modal-edit-description" rows="6" maxlength="5000" ${busy ? "disabled" : ""}>${escapeHtml(draft.description)}</textarea>
           </label>
+
+          ${visibilityFieldHtml}
 
           <div class="field">
             <span class="field__label">รูปภาพ ${canEditDoneImage ? "(แก้ไขได้)" : "(แก้ไขได้เฉพาะ Pending)"}</span>
@@ -3350,6 +3938,18 @@ const imageInflightCache = new Map();
     }
 
     return "";
+  }
+
+  function renderAssignableUserOptionsHtml(selectedIds = []) {
+    const users = getAssignableUsersForCurrentRole();
+    const selected = new Set(normalizeVisibleUserIdsInput(selectedIds));
+    return users
+      .map((user) => {
+        const uid = String(user.userId || "");
+        const label = `${user.displayName || user.username || uid} (${user.role || "USER"})`;
+        return `<option value="${escapeAttribute(uid)}"${selected.has(uid) ? " selected" : ""}>${escapeHtml(label)}</option>`;
+      })
+      .join("");
   }
 
   function renderEditImagePanel(detail, draft) {
@@ -3557,8 +4157,12 @@ const imageInflightCache = new Map();
     if (state.noteModal.mode !== "edit" || !state.noteModal.editDraft) return;
     const titleEl = dom.noteModalBody.querySelector("#modal-edit-title");
     const descEl = dom.noteModalBody.querySelector("#modal-edit-description");
+    const visibleUsersEl = dom.noteModalBody.querySelector("#modal-edit-visible-users");
     if (titleEl) state.noteModal.editDraft.title = titleEl.value;
     if (descEl) state.noteModal.editDraft.description = descEl.value;
+    if (visibleUsersEl) {
+      state.noteModal.editDraft.visibleToUserIds = getSelectedValuesFromSelect(visibleUsersEl);
+    }
   }
 
   async function submitNoteEdit() {
@@ -3589,6 +4193,10 @@ const imageInflightCache = new Map();
 
     try {
       const data = { title, description: descriptionForApi };
+      if (authCanManageVisibleUsers() && state.noteModal.detail && state.noteModal.detail.canManageVisibility !== false) {
+        const visibleIds = normalizeVisibleUserIdsInput(draft.visibleToUserIds);
+        data.visibleToUserIds = visibleIds;
+      }
       if (draft.newImage) {
         data.imageDataUrl = draft.newImage.dataUrl;
         data.imageName = draft.newImage.imageName;
@@ -3733,9 +4341,8 @@ const imageInflightCache = new Map();
     const username = String((dom.userMgmtUsername && dom.userMgmtUsername.value) || "").trim();
     const password = String((dom.userMgmtPassword && dom.userMgmtPassword.value) || "");
     const displayName = String((dom.userMgmtDisplayName && dom.userMgmtDisplayName.value) || "").trim();
-    const role = String((dom.userMgmtRole && dom.userMgmtRole.value) || "USER").trim().toUpperCase() === "ADMIN"
-      ? "ADMIN"
-      : "USER";
+    const rawRole = String((dom.userMgmtRole && dom.userMgmtRole.value) || "USER").trim().toUpperCase();
+    const role = rawRole === "ADMIN" || rawRole === "SUPERVISOR" ? rawRole : "USER";
     const isActive = String((dom.userMgmtIsActive && dom.userMgmtIsActive.value) || "true") !== "false";
 
     if (!username || !password || !displayName) {
@@ -3827,6 +4434,10 @@ const imageInflightCache = new Map();
       closeUserMgmtModal();
       return;
     }
+    if (state.dashboard.open) {
+      closeDashboardModal();
+      return;
+    }
     if (state.confirm.open) {
       if (!state.confirm.busy) closeConfirmModal();
       return;
@@ -3852,6 +4463,7 @@ const imageInflightCache = new Map();
       state.addPage.open ||
       state.camera.open ||
       state.userMgmt.open ||
+      state.dashboard.open ||
       state.auth.loginOpen;
     dom.body.classList.toggle("no-scroll", shouldLock);
   }
@@ -4048,6 +4660,14 @@ const imageInflightCache = new Map();
       updatedByDisplayName: String(
         coalesce(source.updatedByDisplayName, source.updated_by_display_name, source.updatedByName, "") || ""
       ),
+      visibleToUserIds: normalizeVisibleUserIdsInput(
+        coalesce(source.visibleToUserIds, source.visible_to_user_ids, source.visibleUsers, source.visibleTo, [])
+      ),
+      canEdit: toMaybeBoolean(coalesce(source.canEdit, source.can_edit, "")),
+      canChecklist: toMaybeBoolean(coalesce(source.canChecklist, source.can_checklist, "")),
+      isReadOnly: toMaybeBoolean(coalesce(source.isReadOnly, source.is_read_only, "")),
+      canRemoveImageInDone: toMaybeBoolean(coalesce(source.canRemoveImageInDone, source.can_remove_image_in_done, "")),
+      canManageVisibility: toMaybeBoolean(coalesce(source.canManageVisibility, source.can_manage_visibility, "")),
       imageFileId: String(
         coalesce(
           source.imageFileId,
@@ -4078,6 +4698,15 @@ const imageInflightCache = new Map();
 
     note.noteId = note.noteId === null || note.noteId === undefined ? "" : String(note.noteId);
     return note;
+  }
+
+  function toMaybeBoolean(value) {
+    if (value === "" || value === null || value === undefined) return undefined;
+    if (typeof value === "boolean") return value;
+    const s = String(value).trim().toLowerCase();
+    if (s === "true" || s === "1" || s === "yes") return true;
+    if (s === "false" || s === "0" || s === "no") return false;
+    return undefined;
   }
 
   function getLocalNoteById(noteId) {
