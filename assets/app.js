@@ -1926,7 +1926,8 @@ const imageInflightCache = new Map();
         const haystack = `${note.title} ${note.description}`.toLowerCase();
         if (!haystack.includes(search)) return false;
       }
-      const noteDate = toLocalDateInputValue(note.createdAt);
+      const filterDateSource = isDoneScope ? (note.checkedAt || note.createdAt) : note.createdAt;
+      const noteDate = toLocalDateInputValue(filterDateSource);
       if (dateFrom && (!noteDate || noteDate < dateFrom)) return false;
       if (dateTo && (!noteDate || noteDate > dateTo)) return false;
       return true;
