@@ -43,7 +43,7 @@ const imageInflightCache = new Map();
     },
     filters: {
       pending: { search: "", dateFrom: "", dateTo: "", sort: "OLDEST" },
-      done: { search: "", dateFrom: "", dateTo: "", sort: "NEWEST" },
+      done: { search: "", dateFrom: "", dateTo: "", sort: "NEWEST", timeField: "CHECKED_AT" },
     },
     addForm: {
       saving: false,
@@ -175,6 +175,7 @@ const imageInflightCache = new Map();
     dom.historySearch = document.getElementById("history-search");
     dom.historyDateFrom = document.getElementById("history-date-from");
     dom.historyDateTo = document.getElementById("history-date-to");
+    dom.historyTimeField = document.getElementById("history-time-field");
     dom.historySort = document.getElementById("history-sort");
     dom.btnHistoryClearFilters = document.getElementById("btn-history-clear-filters");
     dom.historyCount = document.getElementById("history-count");
@@ -279,6 +280,12 @@ const imageInflightCache = new Map();
       state.filters.done.dateTo = event.target.value;
       renderList("done");
     });
+    if (dom.historyTimeField) {
+      dom.historyTimeField.addEventListener("change", (event) => {
+        state.filters.done.timeField = normalizeDoneHistoryTimeField(event.target.value);
+        renderList("done");
+      });
+    }
     dom.historySort.addEventListener("change", (event) => {
       state.filters.done.sort = event.target.value;
       renderList("done");
@@ -1914,6 +1921,7 @@ const imageInflightCache = new Map();
     let dateFrom = filters.dateFrom || "";
     let dateTo = filters.dateTo || "";
     const sort = filters.sort || (isDoneScope ? "NEWEST" : "OLDEST");
+    const doneTimeField = isDoneScope ? normalizeDoneHistoryTimeField(filters.timeField) : "CREATED_AT";
 
     if (dateFrom && dateTo && dateFrom > dateTo) {
       const tmp = dateFrom;
@@ -1926,14 +1934,16 @@ const imageInflightCache = new Map();
         const haystack = `${note.title} ${note.description}`.toLowerCase();
         if (!haystack.includes(search)) return false;
       }
-      const filterDateSource = isDoneScope ? (note.checkedAt || note.createdAt) : note.createdAt;
+      const filterDateSource = isDoneScope
+        ? getDoneHistoryTimeValue(note, doneTimeField)
+        : note.createdAt;
       const noteDate = toLocalDateInputValue(filterDateSource);
       if (dateFrom && (!noteDate || noteDate < dateFrom)) return false;
       if (dateTo && (!noteDate || noteDate > dateTo)) return false;
       return true;
     });
 
-    filtered.sort((a, b) => compareNotes(a, b, sort, scope));
+    filtered.sort((a, b) => compareNotes(a, b, sort, scope, doneTimeField));
     return filtered;
   }
 
@@ -1944,11 +1954,13 @@ const imageInflightCache = new Map();
     if (!button) return;
 
     const defaultSort = isDoneScope ? "NEWEST" : "OLDEST";
+    const defaultDoneTimeField = "CHECKED_AT";
     const hasActive =
       Boolean((filters.search || "").trim()) ||
       Boolean(filters.dateFrom) ||
       Boolean(filters.dateTo) ||
-      String(filters.sort || defaultSort) !== defaultSort;
+      String(filters.sort || defaultSort) !== defaultSort ||
+      (isDoneScope && normalizeDoneHistoryTimeField(filters.timeField) !== defaultDoneTimeField);
 
     button.disabled = !hasActive;
     button.classList.toggle("is-active", hasActive);
@@ -1961,16 +1973,21 @@ const imageInflightCache = new Map();
     const isDoneScope = scope === "done";
     const filters = isDoneScope ? state.filters.done : state.filters.pending;
     const defaultSort = isDoneScope ? "NEWEST" : "OLDEST";
+    const defaultDoneTimeField = "CHECKED_AT";
 
     filters.search = "";
     filters.dateFrom = "";
     filters.dateTo = "";
     filters.sort = defaultSort;
+    if (isDoneScope) {
+      filters.timeField = defaultDoneTimeField;
+    }
 
     if (isDoneScope) {
       if (dom.historySearch) dom.historySearch.value = "";
       if (dom.historyDateFrom) dom.historyDateFrom.value = "";
       if (dom.historyDateTo) dom.historyDateTo.value = "";
+      if (dom.historyTimeField) dom.historyTimeField.value = defaultDoneTimeField;
       if (dom.historySort) dom.historySort.value = defaultSort;
       renderList("done");
     } else {
@@ -1982,12 +1999,16 @@ const imageInflightCache = new Map();
     }
   }
 
-  function compareNotes(a, b, sort, scope = "pending") {
+  function compareNotes(a, b, sort, scope = "pending", doneTimeField = "CHECKED_AT") {
     const isDoneScope = scope === "done";
     const aTitle = (a.title || "").toLocaleLowerCase();
     const bTitle = (b.title || "").toLocaleLowerCase();
-    const timeA = isDoneScope ? (toTimestamp(a.checkedAt) || toTimestamp(a.createdAt)) : toTimestamp(a.createdAt);
-    const timeB = isDoneScope ? (toTimestamp(b.checkedAt) || toTimestamp(b.createdAt)) : toTimestamp(b.createdAt);
+    const timeA = isDoneScope
+      ? (toTimestamp(getDoneHistoryTimeValue(a, doneTimeField)) || toTimestamp(a.createdAt))
+      : toTimestamp(a.createdAt);
+    const timeB = isDoneScope
+      ? (toTimestamp(getDoneHistoryTimeValue(b, doneTimeField)) || toTimestamp(b.createdAt))
+      : toTimestamp(b.createdAt);
 
     switch (sort) {
       case "NEWEST":
@@ -1996,6 +2017,19 @@ const imageInflightCache = new Map();
       default:
         return timeA - timeB || aTitle.localeCompare(bTitle, "th");
     }
+  }
+
+  function normalizeDoneHistoryTimeField(value) {
+    const v = String(value || "").trim().toUpperCase();
+    return v === "CREATED_AT" ? "CREATED_AT" : "CHECKED_AT";
+  }
+
+  function getDoneHistoryTimeValue(note, timeField = "CHECKED_AT") {
+    const basis = normalizeDoneHistoryTimeField(timeField);
+    if (basis === "CREATED_AT") {
+      return note && note.createdAt ? note.createdAt : "";
+    }
+    return (note && (note.checkedAt || note.createdAt)) || "";
   }
 
   function renderNoteCard(note, scope) {
