@@ -117,6 +117,7 @@ const imageInflightCache = new Map();
         dateField: "ANY",
         status: "",
         userFilterMode: "ANY",
+        userSearch: "",
         userId: "",
         role: "",
       },
@@ -247,6 +248,8 @@ const imageInflightCache = new Map();
     dom.pendingSort = document.getElementById("pending-sort");
     dom.pendingUserFilterMode = document.getElementById("pending-user-filter-mode");
     dom.pendingUserId = document.getElementById("pending-user-id");
+    dom.pendingUserFilterModeField = document.getElementById("pending-user-filter-mode-field");
+    dom.pendingUserIdField = document.getElementById("pending-user-id-field");
     dom.btnPendingClearFilters = document.getElementById("btn-pending-clear-filters");
     dom.pendingCount = document.getElementById("pending-count");
     dom.pendingList = document.getElementById("pending-list");
@@ -276,6 +279,7 @@ const imageInflightCache = new Map();
     dom.dashboardDateField = document.getElementById("dashboard-date-field");
     dom.dashboardStatus = document.getElementById("dashboard-status");
     dom.dashboardUserFilterMode = document.getElementById("dashboard-user-filter-mode");
+    dom.dashboardUserSearch = document.getElementById("dashboard-user-search");
     dom.dashboardUserId = document.getElementById("dashboard-user-id");
     dom.dashboardRole = document.getElementById("dashboard-role");
     dom.dashboardUserField = document.getElementById("dashboard-user-field");
@@ -506,6 +510,12 @@ const imageInflightCache = new Map();
       dom.dashboardUserFilterMode.addEventListener("change", (event) => {
         state.dashboard.filters.userFilterMode = dashboardNormalizeUserFilterMode(event.target.value);
         void refreshDashboardSummary({ silent: true });
+      });
+    }
+    if (dom.dashboardUserSearch) {
+      dom.dashboardUserSearch.addEventListener("input", (event) => {
+        state.dashboard.filters.userSearch = String(event.target.value || "");
+        dashboardRenderControls();
       });
     }
     if (dom.dashboardUserId) {
@@ -1178,8 +1188,31 @@ const imageInflightCache = new Map();
     if (dom.pendingUserFilterMode) dom.pendingUserFilterMode.value = pendingMode;
     if (dom.historyUserFilterMode) dom.historyUserFilterMode.value = doneMode;
 
+    userFilterApplyPendingVisibilityByRole();
     renderFilterControls("pending");
     renderFilterControls("done");
+  }
+
+  function userFilterApplyPendingVisibilityByRole() {
+    const isUserRole = authGetRole() === "USER";
+    if (dom.pendingUserFilterModeField) {
+      dom.pendingUserFilterModeField.classList.toggle("hidden", isUserRole);
+    }
+    if (dom.pendingUserIdField) {
+      dom.pendingUserIdField.classList.toggle("hidden", isUserRole);
+    }
+
+    if (!isUserRole) return;
+
+    const hadServerFilter = Boolean(state.filters.pending.userId);
+    state.filters.pending.userFilterMode = "ANY";
+    state.filters.pending.userId = "";
+    if (dom.pendingUserFilterMode) dom.pendingUserFilterMode.value = "ANY";
+    if (dom.pendingUserId) dom.pendingUserId.value = "";
+
+    if (hadServerFilter && authIsLoggedIn() && state.auth.appStarted) {
+      void refreshPendingNotes();
+    }
   }
   // === USER FILTER PATCH END ===
 
@@ -1295,6 +1328,7 @@ const imageInflightCache = new Map();
       dateField: "ANY",
       status: "",
       userFilterMode: "ANY",
+      userSearch: "",
       userId: "",
       role: "",
     };
@@ -1363,12 +1397,36 @@ const imageInflightCache = new Map();
     const role = authGetRole();
     const filters = state.dashboard.filters;
     const users = Array.isArray(state.auth.users) ? state.auth.users : [];
-    const dashboardUsers =
+    const allDashboardUsers =
       role === "ADMIN"
         ? users.filter((u) => u && u.userId)
         : role === "SUPERVISOR"
           ? users.filter((u) => u && u.userId && String(u.role || "USER").toUpperCase() === "USER")
           : users.filter((u) => u && u.userId && String(u.userId) === getCurrentUserId());
+    const selectedRoleFilter = dashboardNormalizeRoleFilterValue(filters.role);
+    const roleFilteredUsers =
+      role === "ADMIN" && selectedRoleFilter
+        ? allDashboardUsers.filter((u) => String(u.role || "USER").toUpperCase() === selectedRoleFilter)
+        : allDashboardUsers;
+    const userSearch = String(filters.userSearch || "").trim().toLowerCase();
+    let dashboardUsers = roleFilteredUsers.filter((u) => {
+      if (!userSearch) return true;
+      const txt = `${u.displayName || ""} ${u.username || ""} ${u.userId || ""}`.toLowerCase();
+      return txt.includes(userSearch);
+    });
+    const allowedUserIds = new Set(roleFilteredUsers.map((u) => String(u.userId || "")));
+
+    if (filters.userId && !allowedUserIds.has(String(filters.userId || ""))) {
+      state.dashboard.filters.userId = "";
+      filters.userId = "";
+    }
+
+    if (filters.userId && !dashboardUsers.some((u) => String(u.userId || "") === String(filters.userId || ""))) {
+      const selectedUser = roleFilteredUsers.find((u) => String(u.userId || "") === String(filters.userId || ""));
+      if (selectedUser) {
+        dashboardUsers = [selectedUser, ...dashboardUsers];
+      }
+    }
 
     if (dom.dashboardSearch && dom.dashboardSearch.value !== String(filters.search || "")) {
       dom.dashboardSearch.value = String(filters.search || "");
@@ -1378,6 +1436,9 @@ const imageInflightCache = new Map();
     if (dom.dashboardDateField) dom.dashboardDateField.value = dashboardNormalizeDateField(filters.dateField);
     if (dom.dashboardStatus) dom.dashboardStatus.value = String(filters.status || "");
     if (dom.dashboardUserFilterMode) dom.dashboardUserFilterMode.value = dashboardNormalizeUserFilterMode(filters.userFilterMode);
+    if (dom.dashboardUserSearch && dom.dashboardUserSearch.value !== String(filters.userSearch || "")) {
+      dom.dashboardUserSearch.value = String(filters.userSearch || "");
+    }
 
     if (dom.dashboardUserId) {
       const optionsHtml = dashboardUsers
@@ -1433,6 +1494,7 @@ const imageInflightCache = new Map();
         dashboardNormalizeDateField(filters.dateField) !== def.dateField ||
         Boolean(filters.status) ||
         dashboardNormalizeUserFilterMode(filters.userFilterMode) !== def.userFilterMode ||
+        Boolean(String(filters.userSearch || "").trim()) ||
         userFilterCountsAsActive ||
         Boolean(filters.role && !(role !== "ADMIN" && filters.role === "USER"));
       dom.btnDashboardClearFilters.disabled = !hasActive;
@@ -1507,6 +1569,7 @@ const imageInflightCache = new Map();
   function resetDashboardFilters() {
     state.dashboard.filters = dashboardGetDefaultFilters();
     dashboardApplyRoleRestrictionsToState();
+    if (dom.dashboardUserSearch) dom.dashboardUserSearch.value = "";
     dashboardRenderControls();
     void refreshDashboardSummary({ silent: true });
   }

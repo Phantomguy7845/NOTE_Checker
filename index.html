@@ -101,7 +101,7 @@
             </select>
           </label>
 
-          <label class="field field--compact">
+          <label class="field field--compact" id="pending-user-filter-mode-field">
             <span class="field__label">ผู้ใช้ (โหมด)</span>
             <select id="pending-user-filter-mode">
               <option value="ANY">Any activity</option>
@@ -110,7 +110,7 @@
             </select>
           </label>
 
-          <label class="field field--compact">
+          <label class="field field--compact" id="pending-user-id-field">
             <span class="field__label">ผู้ใช้</span>
             <select id="pending-user-id">
               <option value="">ทุกคน</option>
@@ -363,13 +363,6 @@
               </select>
             </label>
 
-            <label class="field field--compact" id="dashboard-user-field">
-              <span class="field__label">ผู้ใช้</span>
-              <select id="dashboard-user-id">
-                <option value="">ทุกคน</option>
-              </select>
-            </label>
-
             <label class="field field--compact" id="dashboard-role-field">
               <span class="field__label">Role</span>
               <select id="dashboard-role">
@@ -377,6 +370,18 @@
                 <option value="USER">USER</option>
                 <option value="SUPERVISOR">SUPERVISOR</option>
                 <option value="ADMIN">ADMIN</option>
+              </select>
+            </label>
+
+            <label class="field field--compact" id="dashboard-user-search-field">
+              <span class="field__label">ค้นหาผู้ใช้</span>
+              <input id="dashboard-user-search" type="search" placeholder="ค้นหาชื่อผู้ใช้">
+            </label>
+
+            <label class="field field--compact" id="dashboard-user-field">
+              <span class="field__label">ผู้ใช้</span>
+              <select id="dashboard-user-id">
+                <option value="">ทุกคน</option>
               </select>
             </label>
           </div>
