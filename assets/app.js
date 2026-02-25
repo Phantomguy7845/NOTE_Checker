@@ -3722,6 +3722,7 @@ const imageInflightCache = new Map();
     if (!state.sideMenu.open) return;
 
     state.sideMenu.open = false;
+    releaseFocusBeforeHide(dom.sideMenuPanel, dom.btnOpenSideMenu);
     if (dom.btnOpenSideMenu) dom.btnOpenSideMenu.setAttribute("aria-expanded", "false");
     dom.sideMenuPanel.setAttribute("aria-hidden", "true");
     dom.sideMenuBackdrop.setAttribute("aria-hidden", "true");
@@ -4841,6 +4842,7 @@ const imageInflightCache = new Map();
     renderUserSettingModalState();
 
     if (dom.userSettingShell && dom.userSettingBackdrop) {
+      releaseFocusBeforeHide(dom.userSettingShell, dom.userMgmtShell && !dom.userMgmtShell.classList.contains("hidden") ? dom.userMgmtShell.querySelector("button, input, select, textarea, [tabindex]:not([tabindex='-1'])") : null);
       hideModalElements(dom.userSettingBackdrop, dom.userSettingShell);
       dom.userSettingShell.setAttribute("aria-hidden", "true");
       dom.userSettingBackdrop.setAttribute("aria-hidden", "true");
@@ -4970,6 +4972,7 @@ const imageInflightCache = new Map();
     renderUserDeleteConfirmState();
 
     if (dom.userDeleteShell && dom.userDeleteBackdrop) {
+      releaseFocusBeforeHide(dom.userDeleteShell, dom.userSettingShell && !dom.userSettingShell.classList.contains("hidden") ? dom.userSettingShell.querySelector("button, input, select, textarea, [tabindex]:not([tabindex='-1'])") : null);
       hideModalElements(dom.userDeleteBackdrop, dom.userDeleteShell);
       dom.userDeleteShell.setAttribute("aria-hidden", "true");
       dom.userDeleteBackdrop.setAttribute("aria-hidden", "true");
@@ -5082,6 +5085,7 @@ const imageInflightCache = new Map();
     if (state.userSetting.open) closeUserSettingModal({ force: true });
     if (state.userDeleteConfirm.open) closeUserDeleteConfirmModal({ force: true });
     renderUserMgmtModalState();
+    releaseFocusBeforeHide(dom.userMgmtShell, dom.btnOpenUserMgmt || dom.btnOpenSideMenu);
     hideModalElements(dom.userMgmtBackdrop, dom.userMgmtShell);
     dom.userMgmtShell.setAttribute("aria-hidden", "true");
     dom.userMgmtBackdrop.setAttribute("aria-hidden", "true");
@@ -5279,6 +5283,26 @@ const imageInflightCache = new Map();
       backdrop.classList.add("is-open");
       shell.classList.add("is-open");
     });
+  }
+
+  function releaseFocusBeforeHide(container, fallbackEl) {
+    try {
+      if (!container) return;
+      const activeEl = document.activeElement;
+      if (!activeEl || activeEl === document.body) return;
+      if (!container.contains(activeEl)) return;
+
+      if (fallbackEl && typeof fallbackEl.focus === "function" && !fallbackEl.disabled) {
+        fallbackEl.focus({ preventScroll: true });
+        if (!container.contains(document.activeElement)) return;
+      }
+
+      if (typeof activeEl.blur === "function") {
+        activeEl.blur();
+      }
+    } catch (_) {
+      // keep close flow resilient even if focus management fails
+    }
   }
 
   function hideModalElements(backdrop, shell) {
