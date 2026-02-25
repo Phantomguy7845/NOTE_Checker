@@ -1,4 +1,5 @@
 const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
+const imageMemoryCache = new Map();
 
 (() => {
   "use strict";
@@ -13,6 +14,11 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     emptyDescriptionSentinel: "\u200B",
     syncStorageKey: "note_checker_sync_queue_v1",
     localCacheKey: "note_checker_local_note_cache_v1",
+    cacheDbName: "note_checker_cache_db",
+    cacheDbVersion: 1,
+    cacheStoreNotes: "notes",
+    cacheStoreImages: "images",
+    doneImageCacheTtlDays: 7,
     syncRetryBaseMs: 8000,
     syncRetryMaxMs: 60000,
     mobileBreakpoint: 680,
@@ -89,6 +95,10 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
   };
 
   const dom = {};
+  const cacheRuntime = {
+    dbPromise: null,
+    cleanupRun: false,
+  };
   let toastCounter = 0;
 
   document.addEventListener("DOMContentLoaded", init);
@@ -99,6 +109,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     updateTopbarScrollState();
     renderHistoryFilterPanel();
     loadLocalNoteCacheFromStorage();
+    void cleanupDoneImageCache(CONFIG.doneImageCacheTtlDays);
     loadSyncQueueFromStorage();
     renderSyncHeader();
     renderAddImagePreview();
@@ -573,6 +584,351 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     }
   }
 
+  async function openCacheDB() {
+    if (cacheRuntime.dbPromise) return cacheRuntime.dbPromise;
+
+    if (typeof window === "undefined" || !("indexedDB" in window)) {
+      cacheRuntime.dbPromise = Promise.resolve(null);
+      return cacheRuntime.dbPromise;
+    }
+
+    cacheRuntime.dbPromise = new Promise((resolve) => {
+      try {
+        const request = window.indexedDB.open(CONFIG.cacheDbName, CONFIG.cacheDbVersion);
+
+        request.onupgradeneeded = () => {
+          const db = request.result;
+          if (!db.objectStoreNames.contains(CONFIG.cacheStoreNotes)) {
+            db.createObjectStore(CONFIG.cacheStoreNotes, { keyPath: "noteId" });
+          }
+          if (!db.objectStoreNames.contains(CONFIG.cacheStoreImages)) {
+            db.createObjectStore(CONFIG.cacheStoreImages, { keyPath: "imageFileId" });
+          }
+        };
+
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => {
+          console.warn("IndexedDB open failed", request.error);
+          resolve(null);
+        };
+        request.onblocked = () => {
+          console.warn("IndexedDB open blocked");
+        };
+      } catch (error) {
+        console.warn("IndexedDB unavailable", error);
+        resolve(null);
+      }
+    });
+
+    return cacheRuntime.dbPromise;
+  }
+
+  async function idbPut(store, value) {
+    const db = await openCacheDB();
+    if (!db) return null;
+
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(store, "readwrite");
+        const req = tx.objectStore(store).put(value);
+        req.onsuccess = () => resolve(req.result ?? value);
+        req.onerror = () => {
+          console.warn(`idbPut(${store}) failed`, req.error);
+          resolve(null);
+        };
+      } catch (error) {
+        console.warn(`idbPut(${store}) exception`, error);
+        resolve(null);
+      }
+    });
+  }
+
+  async function idbGet(store, key) {
+    const db = await openCacheDB();
+    if (!db) return null;
+
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(store, "readonly");
+        const req = tx.objectStore(store).get(key);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => {
+          console.warn(`idbGet(${store}) failed`, req.error);
+          resolve(null);
+        };
+      } catch (error) {
+        console.warn(`idbGet(${store}) exception`, error);
+        resolve(null);
+      }
+    });
+  }
+
+  async function idbDelete(store, key) {
+    const db = await openCacheDB();
+    if (!db) return false;
+
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(store, "readwrite");
+        const req = tx.objectStore(store).delete(key);
+        req.onsuccess = () => resolve(true);
+        req.onerror = () => {
+          console.warn(`idbDelete(${store}) failed`, req.error);
+          resolve(false);
+        };
+      } catch (error) {
+        console.warn(`idbDelete(${store}) exception`, error);
+        resolve(false);
+      }
+    });
+  }
+
+  async function idbCursor(store, mode, onCursor) {
+    const db = await openCacheDB();
+    if (!db) return 0;
+
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(store, mode || "readonly");
+        const objectStore = tx.objectStore(store);
+        const req = objectStore.openCursor();
+        let count = 0;
+
+        req.onerror = () => {
+          console.warn(`idbCursor(${store}) failed`, req.error);
+          resolve(count);
+        };
+
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (!cursor) return;
+          count += 1;
+          try {
+            onCursor(cursor);
+          } catch (error) {
+            console.warn(`idbCursor(${store}) callback error`, error);
+          }
+          cursor.continue();
+        };
+
+        tx.oncomplete = () => resolve(count);
+        tx.onerror = () => resolve(count);
+        tx.onabort = () => resolve(count);
+      } catch (error) {
+        console.warn(`idbCursor(${store}) exception`, error);
+        resolve(0);
+      }
+    });
+  }
+
+  function normalizeImageCacheRecord(record) {
+    if (!record || typeof record !== "object") return null;
+    const imageFileId = String(record.imageFileId || "").trim();
+    const dataUrl = String(record.dataUrl || "");
+    if (!imageFileId || !dataUrl) return null;
+
+    return {
+      imageFileId,
+      noteId: String(record.noteId || ""),
+      dataUrl,
+      status: normalizeStatus(record.status || "PENDING") || "PENDING",
+      cachedAt: Number(record.cachedAt || Date.now()),
+      lastAccessAt: Number(record.lastAccessAt || Date.now()),
+      doneAt: String(record.doneAt || ""),
+    };
+  }
+
+  function buildImageCacheRecord({ imageFileId, noteId = "", dataUrl = "", status = "PENDING", doneAt = "" }) {
+    const normalized = normalizeImageCacheRecord({
+      imageFileId,
+      noteId,
+      dataUrl,
+      status,
+      doneAt,
+      cachedAt: Date.now(),
+      lastAccessAt: Date.now(),
+    });
+    return normalized;
+  }
+
+  async function putImageCacheRecord(record) {
+    const normalized = normalizeImageCacheRecord(record);
+    if (!normalized) return null;
+    imageMemoryCache.set(normalized.imageFileId, normalized);
+    await idbPut(CONFIG.cacheStoreImages, normalized);
+    return normalized;
+  }
+
+  async function deleteImageCacheEverywhere(imageFileId) {
+    const key = String(imageFileId || "").trim();
+    if (!key) return;
+    imageMemoryCache.delete(key);
+    await idbDelete(CONFIG.cacheStoreImages, key);
+  }
+
+  async function touchImageCacheMeta(imageFileId, patch = {}) {
+    const key = String(imageFileId || "").trim();
+    if (!key) return null;
+
+    const mem = imageMemoryCache.get(key);
+    if (mem) {
+      const merged = normalizeImageCacheRecord({
+        ...mem,
+        ...patch,
+        imageFileId: key,
+        lastAccessAt: Date.now(),
+      });
+      if (merged) {
+        imageMemoryCache.set(key, merged);
+        await idbPut(CONFIG.cacheStoreImages, merged);
+        return merged;
+      }
+    }
+
+    const existing = await idbGet(CONFIG.cacheStoreImages, key);
+    if (!existing) return null;
+    const merged = normalizeImageCacheRecord({
+      ...existing,
+      ...patch,
+      imageFileId: key,
+      lastAccessAt: Date.now(),
+    });
+    if (!merged) {
+      await idbDelete(CONFIG.cacheStoreImages, key);
+      return null;
+    }
+    imageMemoryCache.set(key, merged);
+    await idbPut(CONFIG.cacheStoreImages, merged);
+    return merged;
+  }
+
+  async function getImageFast(fileId, noteId = "", meta = {}) {
+    const imageFileId = String(fileId || "").trim();
+    if (!imageFileId) {
+      throw new Error("ไม่มีรหัสรูป");
+    }
+
+    const now = Date.now();
+    const desiredStatus = normalizeStatus(meta.status || "PENDING") || "PENDING";
+    const desiredDoneAt = String(meta.doneAt || "");
+
+    const fromMemory = normalizeImageCacheRecord(imageMemoryCache.get(imageFileId));
+    if (fromMemory) {
+      const touched = {
+        ...fromMemory,
+        noteId: String(noteId || fromMemory.noteId || ""),
+        status: desiredStatus || fromMemory.status,
+        doneAt: desiredStatus === "DONE" ? (desiredDoneAt || fromMemory.doneAt || "") : "",
+        lastAccessAt: now,
+      };
+      imageMemoryCache.set(imageFileId, touched);
+      void idbPut(CONFIG.cacheStoreImages, touched);
+      return touched.dataUrl;
+    }
+
+    const fromIdb = normalizeImageCacheRecord(await idbGet(CONFIG.cacheStoreImages, imageFileId));
+    if (fromIdb) {
+      const touched = {
+        ...fromIdb,
+        noteId: String(noteId || fromIdb.noteId || ""),
+        status: desiredStatus || fromIdb.status,
+        doneAt: desiredStatus === "DONE" ? (desiredDoneAt || fromIdb.doneAt || "") : "",
+        lastAccessAt: now,
+      };
+      imageMemoryCache.set(imageFileId, touched);
+      void idbPut(CONFIG.cacheStoreImages, touched);
+      return touched.dataUrl;
+    }
+
+    const response = await apiGet("getNoteImageData", { fileId: imageFileId });
+    const dataUrl = extractImageDataUrl(response);
+    if (!dataUrl) {
+      throw new Error("ไม่พบข้อมูลรูปภาพ");
+    }
+
+    await putImageCacheRecord(
+      buildImageCacheRecord({
+        imageFileId,
+        noteId: String(noteId || ""),
+        dataUrl,
+        status: desiredStatus,
+        doneAt: desiredStatus === "DONE" ? desiredDoneAt : "",
+      })
+    );
+
+    return dataUrl;
+  }
+
+  async function cacheNoteMetaToIdb(note) {
+    const base = sanitizeLocalNoteCacheNote(note);
+    if (!base) return null;
+
+    const status = normalizeStatus(base.status || "PENDING") || "PENDING";
+    const record = {
+      ...base,
+      noteId: String(base.noteId),
+      status,
+      imageFileId: String(base.imageFileId || ""),
+      checkedAt: String(base.checkedAt || ""),
+      createdAt: String(base.createdAt || ""),
+      updatedAt: String(base.updatedAt || ""),
+      cachedAt: Date.now(),
+      lastAccessAt: Date.now(),
+    };
+    await idbPut(CONFIG.cacheStoreNotes, record);
+    return record;
+  }
+
+  async function cacheLocalImageForNoteByFileId(note, imageDataUrl) {
+    const imageFileId = String(note && note.imageFileId || "").trim();
+    const dataUrl = String(imageDataUrl || "").trim();
+    if (!imageFileId || !dataUrl) return null;
+
+    return putImageCacheRecord(
+      buildImageCacheRecord({
+        imageFileId,
+        noteId: String(note.noteId || ""),
+        dataUrl,
+        status: normalizeStatus(note.status || "PENDING") || "PENDING",
+        doneAt: String(note.checkedAt || ""),
+      })
+    );
+  }
+
+  async function updateCachedImageStatusForNote(note) {
+    if (!note || !note.imageFileId) return null;
+    const status = normalizeStatus(note.status || "PENDING") || "PENDING";
+    return touchImageCacheMeta(note.imageFileId, {
+      noteId: String(note.noteId || ""),
+      status,
+      doneAt: status === "DONE" ? String(note.checkedAt || "") : "",
+    });
+  }
+
+  async function cleanupDoneImageCache(days = CONFIG.doneImageCacheTtlDays) {
+    if (cacheRuntime.cleanupRun) return;
+    cacheRuntime.cleanupRun = true;
+
+    const ttlDays = Math.max(1, Number(days || CONFIG.doneImageCacheTtlDays));
+    const cutoffMs = Date.now() - ttlDays * 24 * 60 * 60 * 1000;
+
+    await idbCursor(CONFIG.cacheStoreImages, "readwrite", (cursor) => {
+      const value = normalizeImageCacheRecord(cursor.value);
+      if (!value) {
+        cursor.delete();
+        return;
+      }
+      if (normalizeStatus(value.status) !== "DONE") return;
+
+      const doneAtMs = toTimestamp(value.doneAt) || Number(value.cachedAt || 0);
+      if (!doneAtMs) return;
+      if (doneAtMs > cutoffMs) return;
+
+      imageMemoryCache.delete(value.imageFileId);
+      cursor.delete();
+    });
+  }
+
   function sanitizeSyncQueueItem(item) {
     if (!item || typeof item !== "object") return null;
     if (!item.type || !item.id) return null;
@@ -979,16 +1335,26 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       const localSnapshot = queueItem.localNote
         ? cloneNoteForUi(queueItem.localNote)
         : buildLocalNoteFromQueueItem(queueItem);
+      const localPreviewDataUrl = String(
+        (queueItem.payload && queueItem.payload.imageDataUrl) || localSnapshot.__localImageDataUrl || ""
+      );
       const cachedNote = {
-        ...note,
         ...localSnapshot,
+        ...note,
         noteId: String(note.noteId),
         status: "PENDING",
         __localOnly: false,
-        __localImageDataUrl: String(localSnapshot.__localImageDataUrl || ""),
+        __localImageDataUrl: localPreviewDataUrl,
       };
       moveLocalNoteCache(localNoteId, note.noteId, { skipRebuild: true });
       setLocalNoteCache(cachedNote, { skipRebuild: true });
+      await cacheNoteMetaToIdb(cachedNote);
+      if (note.imageFileId && cachedNote.__localImageDataUrl) {
+        await cacheLocalImageForNoteByFileId(
+          { ...note, status: "PENDING", checkedAt: "" },
+          cachedNote.__localImageDataUrl
+        );
+      }
 
       clearNoteSyncState(note);
       state.rawPendingNotes = state.rawPendingNotes.filter((n) => String(n.noteId) !== String(note.noteId));
@@ -1001,11 +1367,16 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     if (queueItem.type === "update") {
       const payload = queueItem.payload || {};
       const noteId = String(payload.noteId || "");
+      const data = payload.data && typeof payload.data === "object" ? payload.data : {};
+      const beforeNote = noteId ? cloneNoteForUi(getLocalNoteById(noteId) || {}) : null;
+      const oldImageFileId = String(beforeNote && beforeNote.imageFileId || "");
       const response = await apiPost("updateNote", payload);
       const rawItem = extractNoteDetail(response);
+      let updatedNote = null;
 
       if (rawItem) {
         const note = normalizeNote(rawItem);
+        updatedNote = note;
         if (note.noteId) {
           state.rawPendingNotes = state.rawPendingNotes.filter((n) => String(n.noteId) !== String(note.noteId));
           state.rawDoneNotes = state.rawDoneNotes.filter((n) => String(n.noteId) !== String(note.noteId));
@@ -1017,13 +1388,56 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
         }
       }
 
-      if (noteId) {
-        const liveSnapshot = getLocalNoteById(noteId);
-        if (liveSnapshot) {
-          const cachedNote = cloneNoteForUi(liveSnapshot);
-          cachedNote.__localOnly = false;
-          setLocalNoteCache(cachedNote, { skipRebuild: true });
+      if (updatedNote && updatedNote.noteId) {
+        const newImageFileId = String(updatedNote.imageFileId || "");
+        const hasUploadedNewImage = Boolean(data.imageDataUrl || data.imageBase64);
+        const localPreviewDataUrl = hasUploadedNewImage ? String(data.imageDataUrl || "") : "";
+
+        if (oldImageFileId && oldImageFileId !== newImageFileId) {
+          await deleteImageCacheEverywhere(oldImageFileId);
         }
+
+        if (!newImageFileId) {
+          // remove image
+          if (oldImageFileId) {
+            await deleteImageCacheEverywhere(oldImageFileId);
+          }
+        } else if (oldImageFileId !== newImageFileId) {
+          if (localPreviewDataUrl) {
+            await cacheLocalImageForNoteByFileId(updatedNote, localPreviewDataUrl);
+          }
+        } else {
+          await updateCachedImageStatusForNote(updatedNote);
+        }
+
+        const liveSnapshot = getLocalNoteById(updatedNote.noteId);
+        const cachedNote = {
+          ...(liveSnapshot ? cloneNoteForUi(liveSnapshot) : {}),
+          ...(beforeNote ? cloneNoteForUi(beforeNote) : {}),
+          ...updatedNote,
+          __localOnly: false,
+        };
+
+        if (data.removeImage === true && !hasUploadedNewImage) {
+          cachedNote.__localImageDataUrl = "";
+        } else if (hasUploadedNewImage && localPreviewDataUrl) {
+          cachedNote.__localImageDataUrl = localPreviewDataUrl;
+        } else if (newImageFileId && oldImageFileId === newImageFileId) {
+          cachedNote.__localImageDataUrl = String(
+            (liveSnapshot && liveSnapshot.__localImageDataUrl) ||
+              (beforeNote && beforeNote.__localImageDataUrl) ||
+              ""
+          );
+        } else if (!newImageFileId) {
+          cachedNote.__localImageDataUrl = "";
+        } else {
+          delete cachedNote.__localImageDataUrl;
+        }
+
+        setLocalNoteCache(cachedNote, { skipRebuild: true });
+        await cacheNoteMetaToIdb(cachedNote);
+      } else if (oldImageFileId && data.removeImage === true && !data.imageDataUrl && !data.imageBase64) {
+        await deleteImageCacheEverywhere(oldImageFileId);
       }
 
       rebuildVisibleNotesFromSources();
@@ -1042,6 +1456,11 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       state.rawDoneNotes = state.rawDoneNotes.filter((n) => String(n.noteId) !== String(noteId));
       if (note.noteId) {
         state.rawDoneNotes.push({ ...note, status: "DONE" });
+      }
+
+      if (note.noteId) {
+        await cacheNoteMetaToIdb({ ...note, status: "DONE" });
+        await updateCachedImageStatusForNote({ ...note, status: "DONE" });
       }
 
       rebuildVisibleNotesFromSources();
@@ -1759,8 +2178,14 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
           dataUrl: state.noteModal.detail.__localImageDataUrl,
           message: "",
         };
+        if (detail.imageFileId) {
+          void cacheLocalImageForNoteByFileId(detail, state.noteModal.detail.__localImageDataUrl);
+        }
       } else if (detail.imageDataUrl) {
         state.noteModal.image = { status: "loaded", dataUrl: detail.imageDataUrl, message: "" };
+        if (detail.imageFileId) {
+          void cacheLocalImageForNoteByFileId(detail, detail.imageDataUrl);
+        }
       } else if (detail.imageFileId && !detail.imageDeleted) {
         state.noteModal.image = { status: "loading", dataUrl: "", message: "" };
       } else {
@@ -1790,10 +2215,12 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 
   async function loadNoteImageData(fileId, token) {
     try {
-      const response = await apiGet("getNoteImageData", { fileId });
+      const detail = state.noteModal.detail || {};
+      const dataUrl = await getImageFast(fileId, detail.noteId || "", {
+        status: detail.status || "PENDING",
+        doneAt: detail.checkedAt || "",
+      });
       if (token !== state.noteModal.requestToken || !state.noteModal.open) return;
-
-      const dataUrl = extractImageDataUrl(response);
       if (!dataUrl) {
         throw new Error("ไม่พบข้อมูลรูปภาพ");
       }
