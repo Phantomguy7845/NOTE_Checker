@@ -12,6 +12,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     toastDurationMs: 3200,
     emptyDescriptionSentinel: "\u200B",
     syncStorageKey: "note_checker_sync_queue_v1",
+    localCacheKey: "note_checker_local_note_cache_v1",
     syncRetryBaseMs: 8000,
     syncRetryMaxMs: 60000,
     mobileBreakpoint: 680,
@@ -20,6 +21,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
   const state = {
     rawPendingNotes: [],
     rawDoneNotes: [],
+    localNoteCache: {},
     pendingNotes: [],
     doneNotes: [],
     loading: {
@@ -43,6 +45,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     },
     camera: {
       open: false,
+      target: "add",
       starting: false,
       capturing: false,
       ready: false,
@@ -95,6 +98,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     bindEvents();
     updateTopbarScrollState();
     renderHistoryFilterPanel();
+    loadLocalNoteCacheFromStorage();
     loadSyncQueueFromStorage();
     renderSyncHeader();
     renderAddImagePreview();
@@ -223,7 +227,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     dom.addDescription.addEventListener("input", () => dom.addDescription.classList.remove("is-invalid"));
     dom.btnAddPickImage.addEventListener("click", () => dom.addImageInput.click());
     if (dom.btnAddOpenCamera) {
-      dom.btnAddOpenCamera.addEventListener("click", () => void openCameraModal());
+      dom.btnAddOpenCamera.addEventListener("click", () => void openCameraModal("add"));
     }
     dom.btnAddRemoveImage.addEventListener("click", clearAddFormImage);
     dom.addImageInput.addEventListener("change", handleAddImageChange);
@@ -441,6 +445,33 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     }
   }
 
+  function loadLocalNoteCacheFromStorage() {
+    state.localNoteCache = {};
+
+    let raw = "";
+    try {
+      raw = window.localStorage.getItem(CONFIG.localCacheKey) || "";
+    } catch (error) {
+      return;
+    }
+
+    if (!raw) return;
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+
+      const next = {};
+      Object.entries(parsed).forEach(([noteId, value]) => {
+        const cached = sanitizeLocalNoteCacheNote(value, noteId);
+        if (cached) next[cached.noteId] = cached;
+      });
+      state.localNoteCache = next;
+    } catch (error) {
+      console.warn("Failed to parse local note cache", error);
+    }
+  }
+
   function saveSyncQueueToStorage() {
     try {
       if (!state.sync.queue.length) {
@@ -451,6 +482,94 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     } catch (error) {
       console.warn("Failed to save sync queue", error);
       showToast("error", "บันทึกคิวในเครื่องไม่สำเร็จ (พื้นที่ localStorage อาจเต็ม)");
+    }
+  }
+
+  function saveLocalNoteCacheToStorage() {
+    try {
+      const keys = Object.keys(state.localNoteCache || {});
+      if (!keys.length) {
+        window.localStorage.removeItem(CONFIG.localCacheKey);
+        return;
+      }
+      window.localStorage.setItem(CONFIG.localCacheKey, JSON.stringify(state.localNoteCache));
+    } catch (error) {
+      console.warn("Failed to save local note cache", error);
+      showToast("error", "บันทึกข้อมูล NOTE ในเครื่องไม่สำเร็จ (localStorage อาจเต็ม)");
+    }
+  }
+
+  function sanitizeLocalNoteCacheNote(note, fallbackNoteId = "") {
+    if (!note || typeof note !== "object") return null;
+    const noteId = String(note.noteId || fallbackNoteId || "").trim();
+    if (!noteId) return null;
+
+    const cleaned = { ...note, noteId };
+    delete cleaned.raw;
+    delete cleaned.__syncQueueId;
+    delete cleaned.__syncState;
+    delete cleaned.__syncError;
+    delete cleaned.__syncAttempts;
+    cleaned.__localOnly = false;
+    cleaned.__localImageDataUrl = String(cleaned.__localImageDataUrl || "");
+
+    return cleaned;
+  }
+
+  function setLocalNoteCache(note, options = {}) {
+    const cleaned = sanitizeLocalNoteCacheNote(note);
+    if (!cleaned) return;
+
+    if (normalizeStatus(cleaned.status || "PENDING") === "DONE") {
+      removeLocalNoteCache(cleaned.noteId, options);
+      return;
+    }
+
+    state.localNoteCache[cleaned.noteId] = cleaned;
+    saveLocalNoteCacheToStorage();
+    if (!options.skipRebuild) {
+      rebuildVisibleNotesFromSources();
+    }
+  }
+
+  function removeLocalNoteCache(noteId, options = {}) {
+    const key = String(noteId || "").trim();
+    if (!key) return;
+    if (!state.localNoteCache || !Object.prototype.hasOwnProperty.call(state.localNoteCache, key)) return;
+
+    delete state.localNoteCache[key];
+    saveLocalNoteCacheToStorage();
+    if (!options.skipRebuild) {
+      rebuildVisibleNotesFromSources();
+    }
+  }
+
+  function moveLocalNoteCache(oldNoteId, newNoteId, options = {}) {
+    const oldKey = String(oldNoteId || "").trim();
+    const newKey = String(newNoteId || "").trim();
+    if (!oldKey || !newKey || oldKey === newKey) return;
+
+    const existing = state.localNoteCache[oldKey];
+    if (!existing) return;
+    delete state.localNoteCache[oldKey];
+    state.localNoteCache[newKey] = { ...existing, noteId: newKey, __localOnly: false };
+    saveLocalNoteCacheToStorage();
+    if (!options.skipRebuild) {
+      rebuildVisibleNotesFromSources();
+    }
+  }
+
+  function applyLocalCacheOverlayToLists(pending, done) {
+    const cacheEntries = Object.values(state.localNoteCache || {});
+    if (!cacheEntries.length) return;
+
+    for (const cached of cacheEntries) {
+      const noteId = String(cached.noteId || "");
+      if (!noteId) continue;
+      const target = findNoteInLists(pending, done, noteId);
+      if (!target) continue;
+      Object.assign(target, cloneNoteForUi(cached));
+      target.__localOnly = false;
     }
   }
 
@@ -523,6 +642,8 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     for (const item of queue) {
       applySyncOverlayToLists(item, pending, done);
     }
+
+    applyLocalCacheOverlayToLists(pending, done);
 
     state.pendingNotes = pending;
     state.doneNotes = done;
@@ -855,6 +976,20 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
         state.noteModal.noteId = String(note.noteId);
       }
 
+      const localSnapshot = queueItem.localNote
+        ? cloneNoteForUi(queueItem.localNote)
+        : buildLocalNoteFromQueueItem(queueItem);
+      const cachedNote = {
+        ...note,
+        ...localSnapshot,
+        noteId: String(note.noteId),
+        status: "PENDING",
+        __localOnly: false,
+        __localImageDataUrl: String(localSnapshot.__localImageDataUrl || ""),
+      };
+      moveLocalNoteCache(localNoteId, note.noteId, { skipRebuild: true });
+      setLocalNoteCache(cachedNote, { skipRebuild: true });
+
       clearNoteSyncState(note);
       state.rawPendingNotes = state.rawPendingNotes.filter((n) => String(n.noteId) !== String(note.noteId));
       state.rawPendingNotes.push(note);
@@ -865,6 +1000,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 
     if (queueItem.type === "update") {
       const payload = queueItem.payload || {};
+      const noteId = String(payload.noteId || "");
       const response = await apiPost("updateNote", payload);
       const rawItem = extractNoteDetail(response);
 
@@ -878,6 +1014,15 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
           } else {
             state.rawPendingNotes.push({ ...note, status: "PENDING" });
           }
+        }
+      }
+
+      if (noteId) {
+        const liveSnapshot = getLocalNoteById(noteId);
+        if (liveSnapshot) {
+          const cachedNote = cloneNoteForUi(liveSnapshot);
+          cachedNote.__localOnly = false;
+          setLocalNoteCache(cachedNote, { skipRebuild: true });
         }
       }
 
@@ -1034,8 +1179,14 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     }
   }
 
-  async function openCameraModal() {
-    if (state.addForm.saving || state.addForm.compressing) return;
+  async function openCameraModal(target = "add") {
+    const cameraTarget = target === "edit" ? "edit" : "add";
+    if (cameraTarget === "add") {
+      if (state.addForm.saving || state.addForm.compressing) return;
+    } else {
+      const draft = state.noteModal.editDraft;
+      if (!draft || state.noteModal.saving || draft.compressing) return;
+    }
     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
       showToast("error", "เบราว์เซอร์นี้ไม่รองรับกล้อง กรุณาใช้ปุ่มเลือกรูป");
       return;
@@ -1043,6 +1194,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     if (state.camera.open) return;
 
     state.camera.open = true;
+    state.camera.target = cameraTarget;
     state.camera.starting = true;
     state.camera.capturing = false;
     state.camera.ready = false;
@@ -1163,8 +1315,13 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       const blob = await canvasToBlob(canvas, "image/jpeg", 0.95);
       const file = new File([blob], `camera-${Date.now()}.jpg`, { type: "image/jpeg" });
 
+      const target = state.camera.target === "edit" ? "edit" : "add";
       closeCameraModal({ force: true });
-      await processAddImageFile(file);
+      if (target === "edit") {
+        await processEditImageFile(file);
+      } else {
+        await processAddImageFile(file);
+      }
     } catch (error) {
       state.camera.capturing = false;
       renderCameraModalState();
@@ -1178,6 +1335,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     if (!force && state.camera.capturing) return;
 
     state.camera.open = false;
+    state.camera.target = "add";
     state.camera.starting = false;
     state.camera.ready = false;
     state.camera.capturing = false;
@@ -1704,9 +1862,44 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     const isPending = status !== "DONE";
     const isLocalOnly = Boolean(detail.__localOnly);
     const createdAt = formatDateTime(detail.createdAt) || "-";
+    const createdAtCompact = formatDateTimeCompact(detail.createdAt) || "-";
     const checkedAt = detail.checkedAt ? formatDateTime(detail.checkedAt) : "-";
     const syncMetaText = buildNoteSyncMetaText(detail);
     const imageBlock = renderDetailImageView();
+    const shortNoteId = shortenNoteId(detail.noteId || "-");
+
+    let actionsHtml = "";
+    if (isPending && !isLocalOnly) {
+      actionsHtml += `<button type="button" class="btn btn--outline" data-action="modal-enter-edit">แก้ไข</button>
+        <button type="button" class="btn btn--success" data-action="modal-request-done" data-note-id="${escapeAttribute(detail.noteId || "")}">Checklist เสร็จแล้ว</button>`;
+    }
+    if (isPending && isLocalOnly) {
+      actionsHtml += `<span class="badge badge--subtle">รอ sync ให้เสร็จก่อน จึงแก้ไข/Checklist ได้</span>`;
+    }
+
+    let secondaryMetaHtml = "";
+    if (checkedAt !== "-" || syncMetaText) {
+      secondaryMetaHtml = `
+        <div class="detail-meta-strip detail-meta-strip--secondary ${checkedAt !== "-" && syncMetaText ? "detail-meta-strip--2" : ""}">
+          ${
+            checkedAt !== "-"
+              ? `<div class="detail-meta-card">
+                   <span class="detail-meta-card__label">checkedAt</span>
+                   <div class="detail-meta-card__value" title="${escapeAttribute(checkedAt)}">${escapeHtml(checkedAt)}</div>
+                 </div>`
+              : ""
+          }
+          ${
+            syncMetaText
+              ? `<div class="detail-meta-card">
+                   <span class="detail-meta-card__label">sync</span>
+                   <div class="detail-meta-card__value" title="${escapeAttribute(syncMetaText)}">${escapeHtml(syncMetaText)}${detail.__syncError ? ` (${escapeHtml(detail.__syncError)})` : ""}</div>
+                 </div>`
+              : ""
+          }
+        </div>
+      `;
+    }
 
     return `
       <div class="note-detail">
@@ -1716,32 +1909,6 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
               <span class="detail-row__label">หัวข้อ</span>
               <div class="detail-row__value">${escapeHtml(detail.title || "-")}</div>
             </div>
-            <div class="detail-row">
-              <span class="detail-row__label">สถานะ</span>
-              <div class="detail-row__value">
-                <span class="chip ${status === "DONE" ? "chip--done" : "chip--pending"}">${escapeHtml(status)}</span>
-              </div>
-            </div>
-            <div class="detail-row">
-              <span class="detail-row__label">createdAt</span>
-              <div class="detail-row__value">${escapeHtml(createdAt)}</div>
-            </div>
-            <div class="detail-row">
-              <span class="detail-row__label">checkedAt</span>
-              <div class="detail-row__value">${escapeHtml(checkedAt)}</div>
-            </div>
-            <div class="detail-row">
-              <span class="detail-row__label">noteId</span>
-              <div class="detail-row__value">${escapeHtml(detail.noteId || "-")}</div>
-            </div>
-            ${
-              syncMetaText
-                ? `<div class="detail-row">
-                     <span class="detail-row__label">sync</span>
-                     <div class="detail-row__value">${escapeHtml(syncMetaText)}${detail.__syncError ? ` (${escapeHtml(detail.__syncError)})` : ""}</div>
-                   </div>`
-                : ""
-            }
             <div class="detail-row detail-row--full">
               <span class="detail-row__label">รายละเอียด</span>
               <div class="detail-row__value preserve-linebreak">${escapeHtml(detail.description || "-")}</div>
@@ -1751,20 +1918,26 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 
         ${imageBlock || ""}
 
-        <div class="detail-actions">
-          ${
-            isPending && !isLocalOnly
-              ? `<button type="button" class="btn btn--outline" data-action="modal-enter-edit">แก้ไข</button>
-                 <button type="button" class="btn btn--success" data-action="modal-request-done" data-note-id="${escapeAttribute(detail.noteId || "")}">Checklist เสร็จแล้ว</button>`
-              : ""
-          }
-          ${
-            isPending && isLocalOnly
-              ? `<span class="badge badge--subtle">รอ sync ให้เสร็จก่อน จึงแก้ไข/Checklist ได้</span>`
-              : ""
-          }
-          <button type="button" class="btn btn--ghost" data-action="close-note-modal">ปิด</button>
+        <div class="detail-meta-strip">
+          <div class="detail-meta-card detail-meta-card--status">
+            <span class="detail-meta-card__label">สถานะ</span>
+            <div class="detail-meta-card__value">
+              <span class="chip ${status === "DONE" ? "chip--done" : "chip--pending"}">${escapeHtml(status)}</span>
+            </div>
+          </div>
+          <div class="detail-meta-card">
+            <span class="detail-meta-card__label">createdAt</span>
+            <div class="detail-meta-card__value" title="${escapeAttribute(createdAt)}">${escapeHtml(createdAtCompact)}</div>
+          </div>
+          <div class="detail-meta-card">
+            <span class="detail-meta-card__label">noteId</span>
+            <div class="detail-meta-card__value" title="${escapeAttribute(detail.noteId || "-")}">${escapeHtml(shortNoteId)}</div>
+          </div>
         </div>
+
+        ${secondaryMetaHtml}
+
+        ${actionsHtml ? `<div class="detail-actions">${actionsHtml}</div>` : ""}
       </div>
     `;
   }
@@ -1877,6 +2050,9 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
             <span class="field__label">รูปภาพ (แก้ไขได้เฉพาะ Pending)</span>
             <input id="modal-edit-image-input" type="file" accept="image/*" class="hidden-input" ${busy ? "disabled" : ""}>
             <div class="edit-form__image-actions">
+              <button type="button" class="btn btn--outline btn--sm" data-action="modal-open-edit-camera" ${busy ? "disabled" : ""}>
+                ถ่ายรูป
+              </button>
               <button type="button" class="btn btn--secondary btn--sm" data-action="modal-pick-edit-image" ${busy ? "disabled" : ""}>
                 ${draft.newImage ? "เปลี่ยนรูป" : "เลือกรูปใหม่"}
               </button>
@@ -1901,11 +2077,11 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
   function renderEditImageActionButtons(detail, draft, busy) {
     const hasOriginalRecord = noteHasOriginalImageRecord(detail);
     if (draft.removeImage) {
-      return `<button type="button" class="btn btn--outline btn--sm" data-action="modal-undo-remove-image" ${busy ? "disabled" : ""}>ยกเลิกลบรูป</button>`;
+      return `<button type="button" class="btn btn--outline btn--sm btn--push-end" data-action="modal-undo-remove-image" ${busy ? "disabled" : ""}>ยกเลิกลบรูป</button>`;
     }
 
     if (draft.newImage || hasOriginalRecord) {
-      return `<button type="button" class="btn btn--danger-soft btn--sm" data-action="modal-remove-edit-image" ${busy ? "disabled" : ""}>ลบรูป</button>`;
+      return `<button type="button" class="btn btn--danger-soft btn--sm btn--push-end" data-action="modal-remove-edit-image" ${busy ? "disabled" : ""}>ลบรูป</button>`;
     }
 
     return "";
@@ -2010,6 +2186,11 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       return;
     }
 
+    if (action === "modal-open-edit-camera") {
+      void openCameraModal("edit");
+      return;
+    }
+
     if (action === "modal-remove-edit-image") {
       syncNoteModalDraftFromInputs();
       const draft = state.noteModal.editDraft;
@@ -2068,38 +2249,42 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       const file = event.target.files && event.target.files[0];
       event.target.value = "";
       if (!file) return;
+      await processEditImageFile(file);
+    }
+  }
 
-      if (!file.type.startsWith("image/")) {
-        showToast("error", "กรุณาเลือกไฟล์รูปภาพเท่านั้น");
-        return;
+  async function processEditImageFile(file) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      showToast("error", "กรุณาเลือกไฟล์รูปภาพเท่านั้น");
+      return;
+    }
+
+    syncNoteModalDraftFromInputs();
+    const draft = state.noteModal.editDraft;
+    if (!draft) return;
+
+    draft.compressing = true;
+    renderNoteModal();
+
+    try {
+      const compressed = await compressImageFile(file);
+      if (!state.noteModal.editDraft) return;
+      state.noteModal.editDraft.newImage = {
+        dataUrl: compressed.dataUrl,
+        imageName: compressed.imageName,
+        imageMimeType: compressed.imageMimeType,
+        stats: compressed.stats,
+      };
+      state.noteModal.editDraft.removeImage = false;
+      showToast("success", "เตรียมรูปใหม่สำหรับแก้ไขแล้ว");
+    } catch (error) {
+      showToast("error", `เตรียมรูปไม่สำเร็จ: ${getErrorMessage(error)}`);
+    } finally {
+      if (state.noteModal.editDraft) {
+        state.noteModal.editDraft.compressing = false;
       }
-
-      syncNoteModalDraftFromInputs();
-      const draft = state.noteModal.editDraft;
-      if (!draft) return;
-
-      draft.compressing = true;
       renderNoteModal();
-
-      try {
-        const compressed = await compressImageFile(file);
-        if (!state.noteModal.editDraft) return;
-        state.noteModal.editDraft.newImage = {
-          dataUrl: compressed.dataUrl,
-          imageName: compressed.imageName,
-          imageMimeType: compressed.imageMimeType,
-          stats: compressed.stats,
-        };
-        state.noteModal.editDraft.removeImage = false;
-        showToast("success", "เตรียมรูปใหม่สำหรับแก้ไขแล้ว");
-      } catch (error) {
-        showToast("error", `บีบอัดรูปไม่สำเร็จ: ${getErrorMessage(error)}`);
-      } finally {
-        if (state.noteModal.editDraft) {
-          state.noteModal.editDraft.compressing = false;
-        }
-        renderNoteModal();
-      }
     }
   }
 
@@ -2226,6 +2411,8 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       if (noteSnapshot && noteSnapshot.__localOnly) {
         throw new Error("รายการนี้ยังซิงก์ไม่เสร็จ กรุณารอให้บันทึกขึ้นระบบก่อน");
       }
+
+      removeLocalNoteCache(noteId, { skipRebuild: true });
 
       enqueueSyncOperation({
         type: "markDone",
@@ -2715,6 +2902,15 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     }).format(date);
   }
 
+  function formatDateTimeCompact(value) {
+    const date = parseDate(value);
+    if (!date) return "";
+    return new Intl.DateTimeFormat("th-TH", {
+      dateStyle: "short",
+      timeStyle: "short",
+    }).format(date);
+  }
+
   function toLocalDateInputValue(value) {
     const date = parseDate(value);
     if (!date) return "";
@@ -2740,6 +2936,12 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     const clean = String(text || "").trim();
     if (clean.length <= maxLength) return clean;
     return `${clean.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+  }
+
+  function shortenNoteId(noteId) {
+    const value = String(noteId || "");
+    if (value.length <= 14) return value;
+    return `${value.slice(0, 8)}...${value.slice(-4)}`;
   }
 
   function buildImageLoadPlaceholderMessage(error) {
