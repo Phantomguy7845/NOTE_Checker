@@ -74,17 +74,20 @@
           </label>
 
           <label class="field field--compact">
-            <span class="field__label">วันที่สร้าง</span>
-            <input id="pending-date" type="date">
+            <span class="field__label">ตั้งแต่วันที่</span>
+            <input id="pending-date-from" type="date">
+          </label>
+
+          <label class="field field--compact">
+            <span class="field__label">ถึงวันที่</span>
+            <input id="pending-date-to" type="date">
           </label>
 
           <label class="field field--compact">
             <span class="field__label">เรียงลำดับ</span>
             <select id="pending-sort">
-              <option value="OLDEST">OLDEST</option>
-              <option value="NEWEST">NEWEST</option>
-              <option value="A_Z">A_Z</option>
-              <option value="Z_A">Z_A</option>
+              <option value="OLDEST">เก่ากว่า - ล่าสุด</option>
+              <option value="NEWEST">ล่าสุด - เก่ากว่า</option>
             </select>
           </label>
         </div>
@@ -190,17 +193,20 @@
       </label>
 
       <label class="field field--compact">
-        <span class="field__label">วันที่สร้าง</span>
-        <input id="history-date" type="date">
+        <span class="field__label">ตั้งแต่วันที่</span>
+        <input id="history-date-from" type="date">
+      </label>
+
+      <label class="field field--compact">
+        <span class="field__label">ถึงวันที่</span>
+        <input id="history-date-to" type="date">
       </label>
 
       <label class="field field--compact">
         <span class="field__label">เรียงลำดับ</span>
         <select id="history-sort">
-          <option value="NEWEST">NEWEST</option>
-          <option value="OLDEST">OLDEST</option>
-          <option value="A_Z">A_Z</option>
-          <option value="Z_A">Z_A</option>
+          <option value="NEWEST">ล่าสุด - เก่ากว่า</option>
+          <option value="OLDEST">เก่ากว่า - ล่าสุด</option>
         </select>
       </label>
     </div>

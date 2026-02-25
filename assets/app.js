@@ -32,8 +32,8 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       done: "",
     },
     filters: {
-      pending: { search: "", date: "", sort: "OLDEST" },
-      done: { search: "", date: "", sort: "NEWEST" },
+      pending: { search: "", dateFrom: "", dateTo: "", sort: "OLDEST" },
+      done: { search: "", dateFrom: "", dateTo: "", sort: "NEWEST" },
     },
     addForm: {
       saving: false,
@@ -130,7 +130,8 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     dom.btnAddCancel = document.getElementById("btn-add-cancel");
 
     dom.pendingSearch = document.getElementById("pending-search");
-    dom.pendingDate = document.getElementById("pending-date");
+    dom.pendingDateFrom = document.getElementById("pending-date-from");
+    dom.pendingDateTo = document.getElementById("pending-date-to");
     dom.pendingSort = document.getElementById("pending-sort");
     dom.pendingCount = document.getElementById("pending-count");
     dom.pendingList = document.getElementById("pending-list");
@@ -139,7 +140,8 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     dom.historyPanel = document.getElementById("history-panel");
     dom.btnCloseHistory = document.getElementById("btn-close-history");
     dom.historySearch = document.getElementById("history-search");
-    dom.historyDate = document.getElementById("history-date");
+    dom.historyDateFrom = document.getElementById("history-date-from");
+    dom.historyDateTo = document.getElementById("history-date-to");
     dom.historySort = document.getElementById("history-sort");
     dom.historyCount = document.getElementById("history-count");
     dom.historyList = document.getElementById("history-list");
@@ -195,8 +197,12 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     dom.addImageInput.addEventListener("change", handleAddImageChange);
 
     dom.pendingSearch.addEventListener("input", (event) => handlePendingSearch(event.target.value));
-    dom.pendingDate.addEventListener("change", (event) => {
-      state.filters.pending.date = event.target.value;
+    dom.pendingDateFrom.addEventListener("change", (event) => {
+      state.filters.pending.dateFrom = event.target.value;
+      renderList("pending");
+    });
+    dom.pendingDateTo.addEventListener("change", (event) => {
+      state.filters.pending.dateTo = event.target.value;
       renderList("pending");
     });
     dom.pendingSort.addEventListener("change", (event) => {
@@ -205,8 +211,12 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     });
 
     dom.historySearch.addEventListener("input", (event) => handleHistorySearch(event.target.value));
-    dom.historyDate.addEventListener("change", (event) => {
-      state.filters.done.date = event.target.value;
+    dom.historyDateFrom.addEventListener("change", (event) => {
+      state.filters.done.dateFrom = event.target.value;
+      renderList("done");
+    });
+    dom.historyDateTo.addEventListener("change", (event) => {
+      state.filters.done.dateTo = event.target.value;
       renderList("done");
     });
     dom.historySort.addEventListener("change", (event) => {
@@ -1043,7 +1053,8 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     const notes = (isDoneScope ? state.doneNotes : state.pendingNotes).slice();
     const filters = isDoneScope ? state.filters.done : state.filters.pending;
     const search = (filters.search || "").toLowerCase();
-    const date = filters.date || "";
+    const dateFrom = filters.dateFrom || "";
+    const dateTo = filters.dateTo || "";
     const sort = filters.sort || (isDoneScope ? "NEWEST" : "OLDEST");
 
     const filtered = notes.filter((note) => {
@@ -1051,10 +1062,9 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
         const haystack = `${note.title} ${note.description}`.toLowerCase();
         if (!haystack.includes(search)) return false;
       }
-      if (date) {
-        const noteDate = toLocalDateInputValue(note.createdAt);
-        if (noteDate !== date) return false;
-      }
+      const noteDate = toLocalDateInputValue(note.createdAt);
+      if (dateFrom && (!noteDate || noteDate < dateFrom)) return false;
+      if (dateTo && (!noteDate || noteDate > dateTo)) return false;
       return true;
     });
 
@@ -1071,10 +1081,6 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     switch (sort) {
       case "NEWEST":
         return timeB - timeA || aTitle.localeCompare(bTitle, "th");
-      case "A_Z":
-        return aTitle.localeCompare(bTitle, "th") || timeA - timeB;
-      case "Z_A":
-        return bTitle.localeCompare(aTitle, "th") || timeA - timeB;
       case "OLDEST":
       default:
         return timeA - timeB || aTitle.localeCompare(bTitle, "th");
