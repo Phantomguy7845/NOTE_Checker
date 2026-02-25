@@ -102,12 +102,13 @@ img {
   top: 0;
   z-index: 20;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
-    "brand actions"
-    "api api"
-    "sync sync"
-    "auth auth";
+    "brand"
+    "actions"
+    "api"
+    "sync"
+    "auth";
   gap: 6px 8px;
   align-items: center;
   min-height: var(--topbar-height);
@@ -281,15 +282,25 @@ img {
   grid-area: actions;
   display: flex;
   gap: 6px;
-  justify-content: flex-end;
+  justify-content: flex-start;
   flex-wrap: wrap;
   align-items: center;
   align-self: start;
+  width: 100%;
+  min-width: 0;
 }
 
 .topbar__actions .btn--sm {
   padding: 7px 10px;
   font-size: 0.8rem;
+}
+
+#btn-open-side-menu {
+  order: -3;
+}
+
+#btn-open-history {
+  order: -2;
 }
 
 .page-grid {
@@ -931,10 +942,10 @@ textarea.is-invalid {
   top: 0;
   right: 0;
   z-index: 40;
-  width: min(94vw, 420px);
+  width: 100vw;
   height: 100dvh;
   background: #f8fbff;
-  border-left: 1px solid #dbe7f4;
+  border-left: 0;
   box-shadow: -18px 0 34px rgba(13, 46, 87, 0.12);
   padding: 10px;
   display: grid;
@@ -1832,6 +1843,8 @@ textarea.is-invalid {
   }
 
   .history-panel {
+    width: min(94vw, 420px);
+    border-left: 1px solid #dbe7f4;
     padding: 14px;
     gap: 10px;
   }
