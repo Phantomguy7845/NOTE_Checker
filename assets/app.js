@@ -1,5 +1,6 @@
 const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 const imageMemoryCache = new Map();
+const imageInflightCache = new Map();
 
 (() => {
   "use strict";
@@ -840,23 +841,36 @@ const imageMemoryCache = new Map();
       return touched.dataUrl;
     }
 
-    const response = await apiGet("getNoteImageData", { fileId: imageFileId });
-    const dataUrl = extractImageDataUrl(response);
-    if (!dataUrl) {
-      throw new Error("ไม่พบข้อมูลรูปภาพ");
+    if (imageInflightCache.has(imageFileId)) {
+      return imageInflightCache.get(imageFileId);
     }
 
-    await putImageCacheRecord(
-      buildImageCacheRecord({
-        imageFileId,
-        noteId: String(noteId || ""),
-        dataUrl,
-        status: desiredStatus,
-        doneAt: desiredStatus === "DONE" ? desiredDoneAt : "",
-      })
-    );
+    const inflightPromise = (async () => {
+      const response = await apiGet("getNoteImageData", { fileId: imageFileId });
+      const dataUrl = extractImageDataUrl(response);
+      if (!dataUrl) {
+        throw new Error("ไม่พบข้อมูลรูปภาพ");
+      }
 
-    return dataUrl;
+      await putImageCacheRecord(
+        buildImageCacheRecord({
+          imageFileId,
+          noteId: String(noteId || ""),
+          dataUrl,
+          status: desiredStatus,
+          doneAt: desiredStatus === "DONE" ? desiredDoneAt : "",
+        })
+      );
+
+      return dataUrl;
+    })();
+
+    imageInflightCache.set(imageFileId, inflightPromise);
+    try {
+      return await inflightPromise;
+    } finally {
+      imageInflightCache.delete(imageFileId);
+    }
   }
 
   async function cacheNoteMetaToIdb(note) {
@@ -2109,6 +2123,32 @@ const imageMemoryCache = new Map();
     await loadNoteDetail(noteId);
   }
 
+  async function tryHydrateNoteModalImageFromCache(note, token) {
+    if (!note || !note.imageFileId || note.imageDeleted) return;
+
+    try {
+      const dataUrl = await getImageFast(note.imageFileId, note.noteId || "", {
+        status: note.status || "PENDING",
+        doneAt: note.checkedAt || "",
+      });
+
+      if (token !== state.noteModal.requestToken || !state.noteModal.open) return;
+      if (String(state.noteModal.noteId) !== String(note.noteId || "")) return;
+
+      const currentDetail = state.noteModal.detail || {};
+      if (String(currentDetail.imageFileId || note.imageFileId) !== String(note.imageFileId)) return;
+      if (state.noteModal.image.status === "loaded" && state.noteModal.image.dataUrl === dataUrl) return;
+
+      state.noteModal.image = { status: "loaded", dataUrl, message: "" };
+      if (state.noteModal.detail && !state.noteModal.detail.__localImageDataUrl) {
+        state.noteModal.detail = { ...state.noteModal.detail, __localImageDataUrl: dataUrl };
+      }
+      renderNoteModal();
+    } catch (error) {
+      // Silent here: detailed error/placeholder is handled by the normal detail flow
+    }
+  }
+
   function closeNoteModal() {
     if (!state.noteModal.open) return;
 
@@ -2144,6 +2184,9 @@ const imageMemoryCache = new Map();
       state.noteModal.image = { status: localNote ? "none" : "idle", dataUrl: "", message: "" };
     }
     renderNoteModal();
+    if (localHasImageRecord && localNote) {
+      void tryHydrateNoteModalImageFromCache(localNote, token);
+    }
 
     if (localNote && localNote.__localOnly) {
       state.noteModal.loading = false;
@@ -2223,6 +2266,9 @@ const imageMemoryCache = new Map();
       if (token !== state.noteModal.requestToken || !state.noteModal.open) return;
       if (!dataUrl) {
         throw new Error("ไม่พบข้อมูลรูปภาพ");
+      }
+      if (state.noteModal.detail) {
+        state.noteModal.detail = { ...state.noteModal.detail, __localImageDataUrl: dataUrl };
       }
       state.noteModal.image = { status: "loaded", dataUrl, message: "" };
       renderNoteModal();

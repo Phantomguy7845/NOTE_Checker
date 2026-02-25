@@ -1084,6 +1084,14 @@ textarea.is-invalid {
   z-index: 60;
 }
 
+#camera-backdrop {
+  z-index: 64;
+}
+
+#camera-shell {
+  z-index: 65;
+}
+
 .modal-card {
   width: min(100%, 640px);
   background: #fff;
