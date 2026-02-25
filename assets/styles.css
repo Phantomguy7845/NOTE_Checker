@@ -206,14 +206,19 @@ img {
 .panel--add-launcher {
   display: grid;
   align-content: start;
+  padding: 10px;
 }
 
 .add-launcher {
   display: grid;
-  gap: 14px;
+  gap: 0;
   align-content: start;
-  min-height: 180px;
-  padding: 4px;
+  min-height: 0;
+  padding: 0;
+}
+
+.add-launcher__copy {
+  display: none;
 }
 
 .add-launcher__copy h2 {
@@ -497,7 +502,11 @@ textarea.is-invalid {
 }
 
 .list-wrap--sidebar {
-  min-height: 260px;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding-right: 2px;
 }
 
 .note-list {
@@ -681,6 +690,7 @@ textarea.is-invalid {
   display: grid;
   grid-template-rows: auto auto auto 1fr;
   gap: 10px;
+  overflow: hidden;
   transform: translateX(100%);
   transition: transform var(--anim-med);
 }

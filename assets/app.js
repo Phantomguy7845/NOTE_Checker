@@ -1222,10 +1222,21 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
   async function loadNoteDetail(noteId) {
     const token = ++state.noteModal.requestToken;
     const localNote = getLocalNoteById(noteId);
+    const localHasImageRecord = Boolean(localNote && localNote.imageFileId && !localNote.imageDeleted);
     state.noteModal.loading = true;
     state.noteModal.error = "";
     state.noteModal.detail = localNote || null;
-    state.noteModal.image = { status: "idle", dataUrl: "", message: "" };
+    if (localNote && localNote.__localImageDataUrl) {
+      state.noteModal.image = {
+        status: "loaded",
+        dataUrl: localNote.__localImageDataUrl,
+        message: "",
+      };
+    } else if (localHasImageRecord) {
+      state.noteModal.image = { status: "loading", dataUrl: "", message: "" };
+    } else {
+      state.noteModal.image = { status: localNote ? "none" : "idle", dataUrl: "", message: "" };
+    }
     renderNoteModal();
 
     if (localNote && localNote.__localOnly) {
@@ -1355,11 +1366,6 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
           <div class="detail-row"><div class="skeleton-line skeleton-line--title"></div><div class="skeleton-line skeleton-line--desc"></div></div>
           <div class="detail-row detail-row--full"><div class="skeleton-line skeleton-line--title"></div><div class="skeleton-line skeleton-line--desc"></div><div class="skeleton-line skeleton-line--desc skeleton-line--desc-short"></div></div>
         </div>
-        <div class="detail-image">
-          <div class="detail-image__frame">
-            <div class="inline-spinner"><span class="spinner" aria-hidden="true"></span>กำลังโหลดรูป...</div>
-          </div>
-        </div>
       </div>
     `;
   }
@@ -1414,7 +1420,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
           </div>
         </div>
 
-        ${imageBlock}
+        ${imageBlock || ""}
 
         <div class="detail-actions">
           ${
@@ -1451,33 +1457,22 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       `;
     }
 
-    if (!hasImageRecord && imageState.status !== "loaded") {
+    if (imageState.status === "loaded") {
       return `
         <div class="detail-image">
           <div class="detail-image__frame">
-            <div class="detail-image__placeholder">ไม่มีรูปภาพแนบ</div>
-          </div>
-          <div class="detail-image__meta">imageFileId: -</div>
-        </div>
-      `;
-    }
-
-    if (imageState.status === "loading") {
-      return `
-        <div class="detail-image">
-          <div class="detail-image__frame">
-            <div class="inline-spinner"><span class="spinner" aria-hidden="true"></span>กำลังโหลดรูปภาพ...</div>
+            <img src="${escapeAttribute(imageState.dataUrl)}" alt="รูปภาพประกอบ NOTE">
           </div>
           <div class="detail-image__meta">imageFileId: ${escapeHtml(detail.imageFileId || "-")}</div>
         </div>
       `;
     }
 
-    if (imageState.status === "loaded") {
+    if (hasImageRecord && (imageState.status === "loading" || imageState.status === "idle")) {
       return `
         <div class="detail-image">
           <div class="detail-image__frame">
-            <img src="${escapeAttribute(imageState.dataUrl)}" alt="รูปภาพประกอบ NOTE">
+            <div class="inline-spinner"><span class="spinner" aria-hidden="true"></span>กำลังโหลดรูปภาพ...</div>
           </div>
           <div class="detail-image__meta">imageFileId: ${escapeHtml(detail.imageFileId || "-")}</div>
         </div>
@@ -1498,14 +1493,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       `;
     }
 
-    return `
-      <div class="detail-image">
-        <div class="detail-image__frame">
-          <div class="detail-image__placeholder">ไม่มีรูปภาพแนบ</div>
-        </div>
-        <div class="detail-image__meta">imageFileId: ${escapeHtml(detail.imageFileId || "-")}</div>
-      </div>
-    `;
+    return "";
   }
 
   function enterNoteEditMode() {
