@@ -61,6 +61,7 @@ const imageInflightCache = new Map();
       compressing: false,
       image: null,
       visibleRoleFilters: [],
+      visibleUserSearch: "",
       visibleToUserIds: [],
     },
     camera: {
@@ -239,6 +240,8 @@ const imageInflightCache = new Map();
     dom.addVisibleUsersField = document.getElementById("add-visible-users-field");
     dom.addVisibleUsersHint = document.getElementById("add-visible-users-hint");
     dom.addVisibleRoles = document.getElementById("add-visible-roles");
+    dom.addVisibleUserSearch = document.getElementById("add-visible-user-search");
+    dom.addVisibleUsersCountBadge = document.getElementById("add-visible-users-count-badge");
     dom.addVisibleToUserIds = document.getElementById("add-visible-to-user-ids");
     dom.addImageInput = document.getElementById("add-image-input");
     dom.btnAddPickImage = document.getElementById("btn-add-pick-image");
@@ -417,14 +420,27 @@ const imageInflightCache = new Map();
         renderAddVisibleUsersControl();
       });
     }
+    if (dom.addVisibleUserSearch) {
+      dom.addVisibleUserSearch.addEventListener("input", (event) => {
+        state.addForm.visibleUserSearch = String(event.target.value || "");
+        renderAddVisibleUsersControl();
+      });
+    }
     if (dom.addVisibleToUserIds) {
       dom.addVisibleToUserIds.addEventListener("change", () => {
-        const filteredUsers = getFilteredAssignableUsersForRoles(state.addForm.visibleRoleFilters);
-        const selection = readVisibilityUserSelectionFromSelect(dom.addVisibleToUserIds, filteredUsers);
-        state.addForm.visibleToUserIds = selection.userIds;
+        const roleUsers = getFilteredAssignableUsersForRoles(state.addForm.visibleRoleFilters);
+        const visibleUsers = filterVisibilityUsersBySearch(roleUsers, state.addForm.visibleUserSearch);
+        const selection = readVisibilityUserSelectionFromSelect(dom.addVisibleToUserIds, visibleUsers);
+        state.addForm.visibleToUserIds = mergeVisibilityUserSelectionKeepingHidden(
+          state.addForm.visibleToUserIds,
+          selection.userIds,
+          visibleUsers
+        );
         if (selection.usedSelectAll) {
           renderAddVisibleUsersControl();
+          return;
         }
+        renderAddVisibleUsersSelectionBadge();
       });
     }
     dom.btnAddPickImage.addEventListener("click", () => dom.addImageInput.click());
@@ -1374,6 +1390,35 @@ const imageInflightCache = new Map();
     return `${allOption}${userOptions}`;
   }
 
+  function filterVisibilityUsersBySearch(users, searchText) {
+    const safeUsers = Array.isArray(users) ? users : [];
+    const q = String(searchText || "").trim().toLowerCase();
+    if (!q) return safeUsers;
+    return safeUsers.filter((user) => {
+      const txt = `${user.displayName || ""} ${user.username || ""} ${user.userId || ""}`.toLowerCase();
+      return txt.includes(q);
+    });
+  }
+
+  function mergeVisibilityUserSelectionKeepingHidden(previousIds, visibleSelectionIds, visibleUsers) {
+    const visibleIds = new Set((visibleUsers || []).map((u) => String((u && u.userId) || "")));
+    const prev = normalizeVisibleUserIdsInput(previousIds);
+    const currentVisible = normalizeVisibleUserIdsInput(visibleSelectionIds).filter((id) => visibleIds.has(id));
+    const hiddenKeep = prev.filter((id) => !visibleIds.has(id));
+    return uniqueStrings([...hiddenKeep, ...currentVisible]);
+  }
+
+  function buildVisibilitySelectedCountText(count) {
+    const n = Number(count || 0);
+    return `เลือกแล้ว ${n} คน`;
+  }
+
+  function renderAddVisibleUsersSelectionBadge() {
+    if (!dom.addVisibleUsersCountBadge) return;
+    const count = normalizeVisibleUserIdsInput(state.addForm.visibleToUserIds).length;
+    dom.addVisibleUsersCountBadge.textContent = buildVisibilitySelectedCountText(count);
+  }
+
   function readVisibilityUserSelectionFromSelect(selectEl, filteredUsers) {
     const raw = getSelectedValuesFromSelect(selectEl);
     const allowedIds = new Set((filteredUsers || []).map((u) => String((u && u.userId) || "")));
@@ -1418,25 +1463,33 @@ const imageInflightCache = new Map();
     dom.addVisibleUsersField.classList.toggle("hidden", !canManage);
     if (!canManage) {
       state.addForm.visibleRoleFilters = [];
+      state.addForm.visibleUserSearch = "";
       state.addForm.visibleToUserIds = [];
       if (dom.addVisibleRoles) dom.addVisibleRoles.innerHTML = "";
+      if (dom.addVisibleUserSearch) dom.addVisibleUserSearch.value = "";
       dom.addVisibleToUserIds.innerHTML = "";
+      renderAddVisibleUsersSelectionBadge();
       return;
     }
 
     const role = authGetRole();
     const allowedRoles = getAllowedVisibilityRolesForCurrentRole();
     state.addForm.visibleRoleFilters = normalizeVisibleRoleFiltersInput(state.addForm.visibleRoleFilters, allowedRoles);
-    const users = getFilteredAssignableUsersForRoles(state.addForm.visibleRoleFilters);
+    const roleFilteredUsers = getFilteredAssignableUsersForRoles(state.addForm.visibleRoleFilters);
+    const visibleUsers = filterVisibilityUsersBySearch(roleFilteredUsers, state.addForm.visibleUserSearch);
 
     if (dom.addVisibleRoles) {
       dom.addVisibleRoles.innerHTML = buildVisibilityRoleOptionsHtml(state.addForm.visibleRoleFilters, allowedRoles);
     }
+    if (dom.addVisibleUserSearch && dom.addVisibleUserSearch.value !== String(state.addForm.visibleUserSearch || "")) {
+      dom.addVisibleUserSearch.value = String(state.addForm.visibleUserSearch || "");
+    }
 
-    dom.addVisibleToUserIds.innerHTML = buildVisibilityUserOptionsHtml(users, state.addForm.visibleToUserIds);
-    const allowedIds = new Set(users.map((u) => String(u.userId || "")));
+    dom.addVisibleToUserIds.innerHTML = buildVisibilityUserOptionsHtml(visibleUsers, state.addForm.visibleToUserIds);
+    const allowedIds = new Set(roleFilteredUsers.map((u) => String(u.userId || "")));
     state.addForm.visibleToUserIds = normalizeVisibleUserIdsInput(state.addForm.visibleToUserIds).filter((id) => allowedIds.has(id));
     setSelectedValuesForSelect(dom.addVisibleToUserIds, state.addForm.visibleToUserIds);
+    renderAddVisibleUsersSelectionBadge();
 
     if (dom.addVisibleUsersHint) {
       dom.addVisibleUsersHint.textContent =
@@ -3030,8 +3083,10 @@ const imageInflightCache = new Map();
       dom.addTitle.classList.remove("is-invalid");
       dom.addDescription.classList.remove("is-invalid");
       state.addForm.visibleRoleFilters = [];
+      state.addForm.visibleUserSearch = "";
       state.addForm.visibleToUserIds = [];
       if (dom.addVisibleRoles) setSelectedValuesForSelect(dom.addVisibleRoles, []);
+      if (dom.addVisibleUserSearch) dom.addVisibleUserSearch.value = "";
       if (dom.addVisibleToUserIds) setSelectedValuesForSelect(dom.addVisibleToUserIds, []);
       renderAddVisibleUsersControl();
 
@@ -4055,6 +4110,7 @@ const imageInflightCache = new Map();
       title: detail.title || "",
       description: detail.description || "",
       visibleRoleFilters: deriveVisibleRoleFiltersFromUserIds(detail.visibleToUserIds),
+      visibleUserSearch: "",
       visibleToUserIds: normalizeVisibleUserIdsInput(detail.visibleToUserIds),
       newImage: null,
       removeImage: false,
@@ -4075,6 +4131,7 @@ const imageInflightCache = new Map();
       title: detail.title || "",
       description: detail.description || "",
       visibleRoleFilters: deriveVisibleRoleFiltersFromUserIds(detail.visibleToUserIds),
+      visibleUserSearch: "",
       visibleToUserIds: normalizeVisibleUserIdsInput(detail.visibleToUserIds),
       newImage: null,
       removeImage: false,
@@ -4090,9 +4147,14 @@ const imageInflightCache = new Map();
     if (!Array.isArray(draft.visibleRoleFilters) || draft.visibleRoleFilters.join("|") !== normalizedRoleFilters.join("|")) {
       draft.visibleRoleFilters = normalizedRoleFilters;
     }
-    const filteredVisibleUsers = getFilteredAssignableUsersForRoles(draft.visibleRoleFilters);
+    const roleFilteredVisibleUsers = getFilteredAssignableUsersForRoles(draft.visibleRoleFilters);
+    const visibleUsersSearch = String(draft.visibleUserSearch || "");
+    const filteredVisibleUsers = filterVisibilityUsersBySearch(roleFilteredVisibleUsers, visibleUsersSearch);
     const visibleOptionsHtml = buildVisibilityUserOptionsHtml(filteredVisibleUsers, draft.visibleToUserIds);
     const visibleRoleOptionsHtml = buildVisibilityRoleOptionsHtml(draft.visibleRoleFilters, allowedRoles);
+    const visibleSelectedCountText = buildVisibilitySelectedCountText(
+      normalizeVisibleUserIdsInput(draft.visibleToUserIds).length
+    );
     const visibilityFieldHtml = canManageVisibility
       ? `
           <label class="field">
@@ -4101,6 +4163,16 @@ const imageInflightCache = new Map();
               ${visibleRoleOptionsHtml}
             </select>
             <p class="edit-note">เลือก role ก่อน (เลือกได้มากกว่า 1)</p>
+            <input
+              id="modal-edit-visible-user-search"
+              type="search"
+              placeholder="ค้นหาผู้ใช้"
+              value="${escapeAttribute(visibleUsersSearch)}"
+              ${busy ? "disabled" : ""}
+            >
+            <div class="inline-row">
+              <span class="badge badge--subtle" id="modal-edit-visible-users-count-badge">${escapeHtml(visibleSelectedCountText)}</span>
+            </div>
             <select id="modal-edit-visible-users" class="select-multiple" multiple ${busy ? "disabled" : ""}>
               ${visibleOptionsHtml}
             </select>
@@ -4179,6 +4251,40 @@ const imageInflightCache = new Map();
         return `<option value="${escapeAttribute(uid)}"${selected.has(uid) ? " selected" : ""}>${escapeHtml(label)}</option>`;
       })
       .join("");
+  }
+
+  function renderEditVisibleUsersSelectorControl() {
+    if (state.noteModal.mode !== "edit" || !state.noteModal.editDraft || !dom.noteModalBody) return;
+
+    const draft = state.noteModal.editDraft;
+    const rolesEl = dom.noteModalBody.querySelector("#modal-edit-visible-roles");
+    const searchEl = dom.noteModalBody.querySelector("#modal-edit-visible-user-search");
+    const usersEl = dom.noteModalBody.querySelector("#modal-edit-visible-users");
+    const badgeEl = dom.noteModalBody.querySelector("#modal-edit-visible-users-count-badge");
+    if (!usersEl) return;
+
+    const allowedRoles = getAllowedVisibilityRolesForCurrentRole();
+    draft.visibleRoleFilters = normalizeVisibleRoleFiltersInput(draft.visibleRoleFilters, allowedRoles);
+    const roleFilteredUsers = getFilteredAssignableUsersForRoles(draft.visibleRoleFilters);
+    const allowedIds = new Set(roleFilteredUsers.map((u) => String(u.userId || "")));
+    draft.visibleToUserIds = normalizeVisibleUserIdsInput(draft.visibleToUserIds).filter((id) => allowedIds.has(id));
+
+    if (rolesEl) {
+      rolesEl.innerHTML = buildVisibilityRoleOptionsHtml(draft.visibleRoleFilters, allowedRoles);
+    }
+    if (searchEl && searchEl.value !== String(draft.visibleUserSearch || "")) {
+      searchEl.value = String(draft.visibleUserSearch || "");
+    }
+
+    const visibleUsers = filterVisibilityUsersBySearch(roleFilteredUsers, draft.visibleUserSearch);
+    usersEl.innerHTML = buildVisibilityUserOptionsHtml(visibleUsers, draft.visibleToUserIds);
+    setSelectedValuesForSelect(usersEl, draft.visibleToUserIds);
+
+    if (badgeEl) {
+      badgeEl.textContent = buildVisibilitySelectedCountText(
+        normalizeVisibleUserIdsInput(draft.visibleToUserIds).length
+      );
+    }
   }
 
   function renderEditImagePanel(detail, draft) {
@@ -4335,6 +4441,12 @@ const imageInflightCache = new Map();
     if (event.target && event.target.id === "modal-edit-description") {
       state.noteModal.editDraft.description = event.target.value;
       event.target.classList.remove("is-invalid");
+      return;
+    }
+
+    if (event.target && event.target.id === "modal-edit-visible-user-search") {
+      state.noteModal.editDraft.visibleUserSearch = String(event.target.value || "");
+      renderEditVisibleUsersSelectorControl();
     }
   }
 
@@ -4352,7 +4464,7 @@ const imageInflightCache = new Map();
         state.noteModal.editDraft.visibleToUserIds = normalizeVisibleUserIdsInput(state.noteModal.editDraft.visibleToUserIds)
           .filter((id) => allowedIds.has(id));
       }
-      renderNoteModal();
+      renderEditVisibleUsersSelectorControl();
       return;
     }
     if (event.target && event.target.id === "modal-edit-visible-users") {
@@ -4407,6 +4519,7 @@ const imageInflightCache = new Map();
     const titleEl = dom.noteModalBody.querySelector("#modal-edit-title");
     const descEl = dom.noteModalBody.querySelector("#modal-edit-description");
     const visibleRolesEl = dom.noteModalBody.querySelector("#modal-edit-visible-roles");
+    const visibleUserSearchEl = dom.noteModalBody.querySelector("#modal-edit-visible-user-search");
     const visibleUsersEl = dom.noteModalBody.querySelector("#modal-edit-visible-users");
     if (titleEl) state.noteModal.editDraft.title = titleEl.value;
     if (descEl) state.noteModal.editDraft.description = descEl.value;
@@ -4416,13 +4529,23 @@ const imageInflightCache = new Map();
         getAllowedVisibilityRolesForCurrentRole()
       );
     }
+    if (visibleUserSearchEl) {
+      state.noteModal.editDraft.visibleUserSearch = String(visibleUserSearchEl.value || "");
+    }
     if (visibleUsersEl) {
-      const filteredUsers = getFilteredAssignableUsersForRoles(state.noteModal.editDraft.visibleRoleFilters);
-      const selection = readVisibilityUserSelectionFromSelect(visibleUsersEl, filteredUsers);
-      state.noteModal.editDraft.visibleToUserIds = selection.userIds;
+      const roleFilteredUsers = getFilteredAssignableUsersForRoles(state.noteModal.editDraft.visibleRoleFilters);
+      const visibleUsers = filterVisibilityUsersBySearch(roleFilteredUsers, state.noteModal.editDraft.visibleUserSearch);
+      const selection = readVisibilityUserSelectionFromSelect(visibleUsersEl, visibleUsers);
+      state.noteModal.editDraft.visibleToUserIds = mergeVisibilityUserSelectionKeepingHidden(
+        state.noteModal.editDraft.visibleToUserIds,
+        selection.userIds,
+        visibleUsers
+      );
       if (selection.usedSelectAll) {
-        renderNoteModal();
+        renderEditVisibleUsersSelectorControl();
+        return;
       }
+      renderEditVisibleUsersSelectorControl();
     }
   }
 
