@@ -14,6 +14,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     syncStorageKey: "note_checker_sync_queue_v1",
     syncRetryBaseMs: 8000,
     syncRetryMaxMs: 60000,
+    mobileBreakpoint: 680,
   };
 
   const state = {
@@ -40,11 +41,20 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       compressing: false,
       image: null,
     },
+    camera: {
+      open: false,
+      starting: false,
+      capturing: false,
+      ready: false,
+      error: "",
+      stream: null,
+    },
     addPage: {
       open: false,
     },
     sidebar: {
       open: false,
+      historyFiltersCollapsed: true,
     },
     noteModal: {
       open: false,
@@ -84,6 +94,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     cacheDom();
     bindEvents();
     updateTopbarScrollState();
+    renderHistoryFilterPanel();
     loadSyncQueueFromStorage();
     renderSyncHeader();
     renderAddImagePreview();
@@ -123,6 +134,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     dom.addDescription = document.getElementById("add-description");
     dom.addImageInput = document.getElementById("add-image-input");
     dom.btnAddPickImage = document.getElementById("btn-add-pick-image");
+    dom.btnAddOpenCamera = document.getElementById("btn-add-open-camera");
     dom.btnAddRemoveImage = document.getElementById("btn-add-remove-image");
     dom.addImagePreviewCard = document.getElementById("add-image-preview-card");
     dom.addImagePreview = document.getElementById("add-image-preview");
@@ -142,6 +154,8 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     dom.historyBackdrop = document.getElementById("history-backdrop");
     dom.historyPanel = document.getElementById("history-panel");
     dom.btnCloseHistory = document.getElementById("btn-close-history");
+    dom.btnToggleHistoryFilters = document.getElementById("btn-toggle-history-filters");
+    dom.historyControls = document.getElementById("history-controls");
     dom.historySearch = document.getElementById("history-search");
     dom.historyDateFrom = document.getElementById("history-date-from");
     dom.historyDateTo = document.getElementById("history-date-to");
@@ -164,6 +178,16 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     dom.btnConfirmCancel = document.getElementById("btn-confirm-cancel");
     dom.btnConfirmSubmit = document.getElementById("btn-confirm-submit");
 
+    dom.cameraBackdrop = document.getElementById("camera-backdrop");
+    dom.cameraShell = document.getElementById("camera-shell");
+    dom.btnCameraClose = document.getElementById("btn-camera-close");
+    dom.btnCameraCancel = document.getElementById("btn-camera-cancel");
+    dom.btnCameraCapture = document.getElementById("btn-camera-capture");
+    dom.cameraVideo = document.getElementById("camera-video");
+    dom.cameraEmptyState = document.getElementById("camera-empty-state");
+    dom.cameraEmptyText = document.getElementById("camera-empty-text");
+    dom.cameraStatusBadge = document.getElementById("camera-status-badge");
+
     dom.globalLoading = document.getElementById("global-loading");
     dom.globalLoadingText = document.getElementById("global-loading-text");
     dom.toastStack = document.getElementById("toast-stack");
@@ -185,6 +209,9 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     dom.btnOpenAddPage.addEventListener("click", openAddPage);
     dom.btnOpenHistory.addEventListener("click", openHistoryPanel);
     dom.btnCloseHistory.addEventListener("click", closeHistoryPanel);
+    if (dom.btnToggleHistoryFilters) {
+      dom.btnToggleHistoryFilters.addEventListener("click", toggleHistoryFilters);
+    }
     dom.historyBackdrop.addEventListener("click", closeHistoryPanel);
 
     dom.addPageBackdrop.addEventListener("click", () => closeAddPage());
@@ -195,8 +222,16 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     dom.addTitle.addEventListener("input", () => dom.addTitle.classList.remove("is-invalid"));
     dom.addDescription.addEventListener("input", () => dom.addDescription.classList.remove("is-invalid"));
     dom.btnAddPickImage.addEventListener("click", () => dom.addImageInput.click());
+    if (dom.btnAddOpenCamera) {
+      dom.btnAddOpenCamera.addEventListener("click", () => void openCameraModal());
+    }
     dom.btnAddRemoveImage.addEventListener("click", clearAddFormImage);
     dom.addImageInput.addEventListener("change", handleAddImageChange);
+
+    if (dom.cameraBackdrop) dom.cameraBackdrop.addEventListener("click", () => closeCameraModal());
+    if (dom.btnCameraClose) dom.btnCameraClose.addEventListener("click", () => closeCameraModal());
+    if (dom.btnCameraCancel) dom.btnCameraCancel.addEventListener("click", () => closeCameraModal());
+    if (dom.btnCameraCapture) dom.btnCameraCapture.addEventListener("click", () => void captureCameraPhoto());
 
     dom.pendingSearch.addEventListener("input", (event) => {
       state.filters.pending.search = event.target.value.trim();
@@ -248,14 +283,42 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 
     document.addEventListener("keydown", handleGlobalKeydown);
     window.addEventListener("scroll", updateTopbarScrollState, { passive: true });
+    window.addEventListener("resize", handleWindowResize, { passive: true });
     window.addEventListener("online", () => {
       void processSyncQueue({ manual: true, reason: "browser-online" });
     });
   }
 
+  function handleWindowResize() {
+    renderHistoryFilterPanel();
+  }
+
   function updateTopbarScrollState() {
     if (!dom.topbar) return;
     dom.topbar.classList.toggle("is-scrolled", window.scrollY > 8);
+  }
+
+  function isMobileViewport() {
+    return window.innerWidth < CONFIG.mobileBreakpoint;
+  }
+
+  function renderHistoryFilterPanel() {
+    if (!dom.historyPanel || !dom.historyControls || !dom.btnToggleHistoryFilters) return;
+
+    const collapsed = isMobileViewport() ? state.sidebar.historyFiltersCollapsed : false;
+    dom.historyPanel.classList.toggle("is-filters-collapsed", collapsed);
+    dom.btnToggleHistoryFilters.setAttribute("aria-expanded", String(!collapsed));
+    dom.btnToggleHistoryFilters.textContent = collapsed ? "ตัวกรอง" : "ซ่อนตัวกรอง";
+  }
+
+  function setHistoryFiltersCollapsed(collapsed) {
+    state.sidebar.historyFiltersCollapsed = Boolean(collapsed);
+    renderHistoryFilterPanel();
+  }
+
+  function toggleHistoryFilters() {
+    if (!isMobileViewport()) return;
+    setHistoryFiltersCollapsed(!state.sidebar.historyFiltersCollapsed);
   }
 
   async function bootstrap() {
@@ -864,6 +927,9 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     const force = Boolean(options.force);
     if (!state.addPage.open) return;
     if (!force && (state.addForm.saving || state.addForm.compressing)) return;
+    if (state.camera.open) {
+      closeCameraModal({ force: true });
+    }
 
     state.addPage.open = false;
     hideModalElements(dom.addPageBackdrop, dom.addPageShell);
@@ -936,10 +1002,15 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
   async function handleAddImageChange(event) {
     const file = event.target.files && event.target.files[0];
     if (!file) return;
+    dom.addImageInput.value = "";
+    await processAddImageFile(file);
+  }
+
+  async function processAddImageFile(file) {
+    if (!file) return;
 
     if (!file.type.startsWith("image/")) {
       showToast("error", "กรุณาเลือกไฟล์รูปภาพเท่านั้น");
-      dom.addImageInput.value = "";
       return;
     }
 
@@ -953,14 +1024,187 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
         imageMimeType: compressed.imageMimeType,
         stats: compressed.stats,
       };
-      showToast("success", "บีบอัดรูปเรียบร้อย");
+      showToast("success", "เตรียมรูปพร้อม timestamp แล้ว");
     } catch (error) {
       state.addForm.image = null;
-      showToast("error", `บีบอัดรูปไม่สำเร็จ: ${getErrorMessage(error)}`);
+      showToast("error", `เตรียมรูปไม่สำเร็จ: ${getErrorMessage(error)}`);
     } finally {
       state.addForm.compressing = false;
-      dom.addImageInput.value = "";
       renderAddImagePreview();
+    }
+  }
+
+  async function openCameraModal() {
+    if (state.addForm.saving || state.addForm.compressing) return;
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+      showToast("error", "เบราว์เซอร์นี้ไม่รองรับกล้อง กรุณาใช้ปุ่มเลือกรูป");
+      return;
+    }
+    if (state.camera.open) return;
+
+    state.camera.open = true;
+    state.camera.starting = true;
+    state.camera.capturing = false;
+    state.camera.ready = false;
+    state.camera.error = "";
+    state.camera.stream = null;
+    renderCameraModalState();
+
+    showModalElements(dom.cameraBackdrop, dom.cameraShell);
+    dom.cameraShell.setAttribute("aria-hidden", "false");
+    dom.cameraBackdrop.setAttribute("aria-hidden", "false");
+    syncBodyScrollLock();
+
+    try {
+      const stream = await requestCameraStream();
+      if (!state.camera.open) {
+        stopMediaStream(stream);
+        return;
+      }
+      state.camera.stream = stream;
+      dom.cameraVideo.srcObject = stream;
+      await dom.cameraVideo.play().catch(() => {});
+      state.camera.starting = false;
+      state.camera.ready = true;
+      state.camera.error = "";
+    } catch (error) {
+      state.camera.starting = false;
+      state.camera.ready = false;
+      state.camera.error = getErrorMessage(error);
+    } finally {
+      renderCameraModalState();
+    }
+  }
+
+  async function requestCameraStream() {
+    const tries = [
+      {
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      },
+      { video: true, audio: false },
+    ];
+
+    let lastError = null;
+    for (const constraints of tries) {
+      try {
+        return await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw new Error(lastError && lastError.message ? lastError.message : "ไม่สามารถเปิดกล้องได้");
+  }
+
+  function renderCameraModalState() {
+    if (!dom.cameraShell) return;
+    const showVideo = state.camera.ready && !state.camera.error;
+
+    dom.cameraVideo.classList.toggle("hidden", !showVideo);
+    dom.cameraEmptyState.classList.toggle("hidden", showVideo);
+
+    if (state.camera.capturing) {
+      dom.cameraStatusBadge.textContent = "กำลังประมวลผล...";
+      dom.cameraStatusBadge.dataset.state = "loading";
+      dom.cameraEmptyText.textContent = "กำลังประมวลผลรูปจากกล้อง...";
+    } else if (state.camera.starting) {
+      dom.cameraStatusBadge.textContent = "กำลังเริ่มกล้อง...";
+      dom.cameraStatusBadge.dataset.state = "loading";
+      dom.cameraEmptyText.textContent = "กำลังเริ่มกล้อง...";
+    } else if (state.camera.error) {
+      dom.cameraStatusBadge.textContent = "เปิดกล้องไม่สำเร็จ";
+      dom.cameraStatusBadge.dataset.state = "error";
+      dom.cameraEmptyText.textContent = state.camera.error;
+    } else if (state.camera.ready) {
+      dom.cameraStatusBadge.textContent = "พร้อมถ่ายรูป";
+      dom.cameraStatusBadge.dataset.state = "ready";
+      dom.cameraEmptyText.textContent = "";
+    } else {
+      dom.cameraStatusBadge.textContent = "ยังไม่พร้อม";
+      dom.cameraStatusBadge.dataset.state = "idle";
+      dom.cameraEmptyText.textContent = "กล้องยังไม่พร้อมใช้งาน";
+    }
+
+    dom.btnCameraCapture.disabled = !state.camera.ready || state.camera.capturing || state.camera.starting;
+    dom.btnCameraCapture.textContent = state.camera.capturing ? "กำลังประมวลผล..." : "ถ่ายรูป";
+    dom.btnCameraClose.disabled = state.camera.capturing;
+    dom.btnCameraCancel.disabled = state.camera.capturing;
+  }
+
+  async function captureCameraPhoto() {
+    if (!state.camera.open || !state.camera.ready || state.camera.capturing) return;
+
+    const video = dom.cameraVideo;
+    const width = video.videoWidth || 0;
+    const height = video.videoHeight || 0;
+    if (!width || !height) {
+      showToast("error", "กล้องยังไม่พร้อมสำหรับการจับภาพ");
+      return;
+    }
+
+    state.camera.capturing = true;
+    renderCameraModalState();
+
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d", { alpha: false });
+      if (!ctx) throw new Error("เบราว์เซอร์ไม่รองรับการจับภาพ");
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, width, height);
+      ctx.drawImage(video, 0, 0, width, height);
+
+      const blob = await canvasToBlob(canvas, "image/jpeg", 0.95);
+      const file = new File([blob], `camera-${Date.now()}.jpg`, { type: "image/jpeg" });
+
+      closeCameraModal({ force: true });
+      await processAddImageFile(file);
+    } catch (error) {
+      state.camera.capturing = false;
+      renderCameraModalState();
+      showToast("error", `ถ่ายรูปไม่สำเร็จ: ${getErrorMessage(error)}`);
+    }
+  }
+
+  function closeCameraModal(options = {}) {
+    const force = Boolean(options.force);
+    if (!state.camera.open) return;
+    if (!force && state.camera.capturing) return;
+
+    state.camera.open = false;
+    state.camera.starting = false;
+    state.camera.ready = false;
+    state.camera.capturing = false;
+    state.camera.error = "";
+    stopMediaStream(state.camera.stream);
+    state.camera.stream = null;
+
+    try {
+      dom.cameraVideo.pause();
+    } catch (_) {
+      // ignore
+    }
+    dom.cameraVideo.srcObject = null;
+
+    hideModalElements(dom.cameraBackdrop, dom.cameraShell);
+    dom.cameraShell.setAttribute("aria-hidden", "true");
+    dom.cameraBackdrop.setAttribute("aria-hidden", "true");
+    syncBodyScrollLock();
+    renderCameraModalState();
+  }
+
+  function stopMediaStream(stream) {
+    if (!stream) return;
+    try {
+      stream.getTracks().forEach((track) => track.stop());
+    } catch (_) {
+      // ignore
     }
   }
 
@@ -980,6 +1224,9 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     const isFormLocked = state.addForm.saving || isBusy;
 
     dom.btnAddPickImage.disabled = isFormLocked;
+    if (dom.btnAddOpenCamera) {
+      dom.btnAddOpenCamera.disabled = isFormLocked || state.camera.open;
+    }
     dom.btnAddRemoveImage.disabled = isFormLocked || (!image && !isBusy);
     dom.btnAddCancel.disabled = isFormLocked;
     dom.btnCloseAddPage.disabled = isFormLocked;
@@ -1040,6 +1287,9 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     const countEl = isDoneScope ? dom.historyCount : dom.pendingCount;
     const filteredNotes = getFilteredAndSortedNotes(scope);
     renderFilterControls(scope);
+    if (scope === "done") {
+      renderHistoryFilterPanel();
+    }
 
     countEl.textContent = `${filteredNotes.length} / ${notes.length} รายการ`;
 
@@ -1110,6 +1360,9 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 
     button.disabled = !hasActive;
     button.classList.toggle("is-active", hasActive);
+    if (isDoneScope && dom.btnToggleHistoryFilters) {
+      dom.btnToggleHistoryFilters.classList.toggle("is-active", hasActive);
+    }
   }
 
   function resetFilters(scope) {
@@ -1228,6 +1481,11 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
   function openHistoryPanel() {
     if (state.sidebar.open) return;
     state.sidebar.open = true;
+    if (isMobileViewport()) {
+      setHistoryFiltersCollapsed(true);
+    } else {
+      renderHistoryFilterPanel();
+    }
     dom.btnOpenHistory.setAttribute("aria-expanded", "true");
     dom.historyPanel.setAttribute("aria-hidden", "false");
     dom.historyBackdrop.classList.remove("hidden");
@@ -1995,6 +2253,10 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
   function handleGlobalKeydown(event) {
     if (event.key !== "Escape") return;
 
+    if (state.camera.open) {
+      closeCameraModal();
+      return;
+    }
     if (state.confirm.open) {
       if (!state.confirm.busy) closeConfirmModal();
       return;
@@ -2014,7 +2276,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 
   function syncBodyScrollLock() {
     const shouldLock =
-      state.sidebar.open || state.noteModal.open || state.confirm.open || state.addPage.open;
+      state.sidebar.open || state.noteModal.open || state.confirm.open || state.addPage.open || state.camera.open;
     dom.body.classList.toggle("no-scroll", shouldLock);
   }
 
@@ -2285,6 +2547,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, targetWidth, targetHeight);
     ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+    drawTimestampOverlay(ctx, targetWidth, targetHeight, new Date());
 
     const dataUrl = canvas.toDataURL("image/jpeg", CONFIG.imageQuality);
     const compressedSize = estimateDataUrlBytes(dataUrl);
@@ -2334,6 +2597,96 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       .replace(/[^\w.-]+/g, "_")
       .slice(0, 80);
     return `${base || "image"}.jpg`;
+  }
+
+  function drawTimestampOverlay(ctx, width, height, dateValue) {
+    const stamp = formatImageTimestamp(dateValue);
+    const fontSize = Math.max(14, Math.round(Math.min(width, height) * 0.032));
+    const padX = Math.max(10, Math.round(fontSize * 0.7));
+    const padY = Math.max(7, Math.round(fontSize * 0.45));
+    const margin = Math.max(10, Math.round(fontSize * 0.65));
+    const radius = Math.max(8, Math.round(fontSize * 0.55));
+
+    ctx.save();
+    ctx.font = `700 ${fontSize}px "Segoe UI", Tahoma, sans-serif`;
+    ctx.textBaseline = "middle";
+
+    const textWidth = Math.ceil(ctx.measureText(stamp).width);
+    const boxWidth = textWidth + padX * 2;
+    const boxHeight = fontSize + padY * 2;
+    const x = Math.max(margin, width - boxWidth - margin);
+    const y = Math.max(margin, height - boxHeight - margin);
+
+    drawRoundedRectPath(ctx, x, y, boxWidth, boxHeight, radius);
+    ctx.fillStyle = "rgba(10, 20, 34, 0.58)";
+    ctx.fill();
+    ctx.lineWidth = Math.max(1, Math.round(fontSize * 0.08));
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.32)";
+    ctx.stroke();
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(stamp, x + padX, y + boxHeight / 2);
+    ctx.restore();
+  }
+
+  function drawRoundedRectPath(ctx, x, y, width, height, radius) {
+    const r = Math.min(radius, width / 2, height / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + width, y, x + width, y + height, r);
+    ctx.arcTo(x + width, y + height, x, y + height, r);
+    ctx.arcTo(x, y + height, x, y, r);
+    ctx.arcTo(x, y, x + width, y, r);
+    ctx.closePath();
+  }
+
+  function formatImageTimestamp(dateValue) {
+    const d = parseDate(dateValue) || new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mi = String(d.getMinutes()).padStart(2, "0");
+    const ss = String(d.getSeconds()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
+  }
+
+  function canvasToBlob(canvas, type = "image/jpeg", quality = 0.92) {
+    return new Promise((resolve, reject) => {
+      if (typeof canvas.toBlob !== "function") {
+        try {
+          const dataUrl = canvas.toDataURL(type, quality);
+          resolve(dataUrlToBlob(dataUrl));
+        } catch (error) {
+          reject(new Error("แปลงภาพไม่สำเร็จ"));
+        }
+        return;
+      }
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            reject(new Error("แปลงภาพไม่สำเร็จ"));
+            return;
+          }
+          resolve(blob);
+        },
+        type,
+        quality
+      );
+    });
+  }
+
+  function dataUrlToBlob(dataUrl) {
+    const parts = String(dataUrl || "").split(",");
+    if (parts.length < 2) throw new Error("dataURL ไม่ถูกต้อง");
+    const mimeMatch = parts[0].match(/data:([^;]+);base64/i);
+    const mime = mimeMatch ? mimeMatch[1] : "image/jpeg";
+    const binary = atob(parts[1]);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: mime });
   }
 
   function buildCompressionStatsText(stats) {

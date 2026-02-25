@@ -146,9 +146,10 @@
 
             <div class="field">
               <span class="field__label">รูปภาพ (ไม่บังคับ)</span>
-              <input id="add-image-input" type="file" accept="image/*" class="hidden-input">
+              <input id="add-image-input" type="file" accept="image/*" capture="environment" class="hidden-input">
               <div class="inline-row">
                 <button type="button" class="btn btn--secondary btn--sm" id="btn-add-pick-image">เลือกรูป</button>
+                <button type="button" class="btn btn--outline btn--sm" id="btn-add-open-camera">ถ่ายรูป</button>
                 <button type="button" class="btn btn--danger-soft btn--sm" id="btn-add-remove-image" disabled>ลบรูป</button>
               </div>
               <p class="field__hint">ระบบจะบีบอัดรูปอัตโนมัติ (max 1280px, JPEG q=0.78) ก่อนส่ง API</p>
@@ -187,50 +188,94 @@
         <h2 id="history-title">Done History</h2>
         <p>ประวัติรายการที่ทำเสร็จแล้ว</p>
       </div>
-      <button type="button" class="icon-btn" id="btn-close-history" aria-label="ปิดประวัติ">
-        <span aria-hidden="true">&times;</span>
-      </button>
+      <div class="history-panel__header-actions">
+        <button
+          type="button"
+          class="btn btn--ghost btn--sm btn--history-filter-toggle"
+          id="btn-toggle-history-filters"
+          aria-controls="history-controls"
+          aria-expanded="false"
+        >
+          ตัวกรอง
+        </button>
+        <button type="button" class="icon-btn" id="btn-close-history" aria-label="ปิดประวัติ">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
     </div>
 
-    <div class="toolbar-grid toolbar-grid--sidebar">
-      <label class="field field--compact">
-        <span class="field__label">ค้นหา</span>
-        <input id="history-search" type="search" placeholder="ค้นหา title / description">
-      </label>
+    <div id="history-controls" class="history-controls">
+      <div class="toolbar-grid toolbar-grid--sidebar">
+        <label class="field field--compact">
+          <span class="field__label">ค้นหา</span>
+          <input id="history-search" type="search" placeholder="ค้นหา title / description">
+        </label>
 
-      <label class="field field--compact">
-        <span class="field__label">ตั้งแต่วันที่</span>
-        <input id="history-date-from" type="date">
-      </label>
+        <label class="field field--compact">
+          <span class="field__label">ตั้งแต่วันที่</span>
+          <input id="history-date-from" type="date">
+        </label>
 
-      <label class="field field--compact">
-        <span class="field__label">ถึงวันที่</span>
-        <input id="history-date-to" type="date">
-      </label>
+        <label class="field field--compact">
+          <span class="field__label">ถึงวันที่</span>
+          <input id="history-date-to" type="date">
+        </label>
 
-      <label class="field field--compact">
-        <span class="field__label">เรียงลำดับ</span>
-        <select id="history-sort">
-          <option value="NEWEST">ล่าสุด - เก่ากว่า</option>
-          <option value="OLDEST">เก่ากว่า - ล่าสุด</option>
-        </select>
-      </label>
-    </div>
+        <label class="field field--compact">
+          <span class="field__label">เรียงลำดับ</span>
+          <select id="history-sort">
+            <option value="NEWEST">ล่าสุด - เก่ากว่า</option>
+            <option value="OLDEST">เก่ากว่า - ล่าสุด</option>
+          </select>
+        </label>
+      </div>
 
-    <div class="toolbar-actions toolbar-actions--sidebar">
-      <button type="button" class="btn btn--ghost btn--sm btn--toolbar-clear" id="btn-history-clear-filters">
-        ล้างตัวกรอง
-      </button>
-    </div>
+      <div class="toolbar-actions toolbar-actions--sidebar">
+        <button type="button" class="btn btn--ghost btn--sm btn--toolbar-clear" id="btn-history-clear-filters">
+          ล้างตัวกรอง
+        </button>
+      </div>
 
-    <div class="history-panel__meta">
-      <span class="badge badge--subtle" id="history-count">0 รายการ</span>
+      <div class="history-panel__meta">
+        <span class="badge badge--subtle" id="history-count">0 รายการ</span>
+      </div>
     </div>
 
     <div class="list-wrap list-wrap--sidebar">
       <ul id="history-list" class="note-list" aria-live="polite"></ul>
     </div>
   </aside>
+
+  <div id="camera-backdrop" class="overlay hidden" aria-hidden="true"></div>
+  <div id="camera-shell" class="modal-shell hidden" aria-hidden="true">
+    <section class="modal-card modal-card--sm camera-card" role="dialog" aria-modal="true" aria-labelledby="camera-heading">
+      <div class="modal-card__header modal-card__header--compact">
+        <div>
+          <h2 id="camera-heading">ถ่ายรูป</h2>
+          <p id="camera-subtext">เปิดกล้องเพื่อแนบรูปพร้อม timestamp</p>
+        </div>
+        <button type="button" class="icon-btn" id="btn-camera-close" aria-label="ปิดหน้าต่างกล้อง">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-card__body camera-card__body">
+        <div class="camera-view" id="camera-view">
+          <video id="camera-video" class="camera-video" playsinline autoplay muted></video>
+          <div class="camera-view__overlay">
+            <span class="camera-badge" id="camera-status-badge">กำลังเริ่มกล้อง...</span>
+          </div>
+          <div class="camera-view__empty hidden" id="camera-empty-state">
+            <p id="camera-empty-text">กำลังเริ่มกล้อง...</p>
+          </div>
+        </div>
+        <p class="camera-hint">รูปที่ถ่ายจะถูกประทับ timestamp และบีบอัดก่อนบันทึก</p>
+      </div>
+      <div class="modal-card__footer camera-card__footer">
+        <button type="button" class="btn btn--ghost" id="btn-camera-cancel">ยกเลิก</button>
+        <button type="button" class="btn btn--primary" id="btn-camera-capture">ถ่ายรูป</button>
+      </div>
+    </section>
+  </div>
 
   <div id="note-modal-backdrop" class="overlay hidden" aria-hidden="true"></div>
   <div id="note-modal-shell" class="modal-shell hidden" aria-hidden="true">
