@@ -83,6 +83,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
   async function init() {
     cacheDom();
     bindEvents();
+    updateTopbarScrollState();
     loadSyncQueueFromStorage();
     renderSyncHeader();
     renderAddImagePreview();
@@ -102,6 +103,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 
   function cacheDom() {
     dom.body = document.body;
+    dom.topbar = document.querySelector(".topbar");
 
     dom.apiStatus = document.getElementById("api-status");
     dom.apiStatusText = document.getElementById("api-status-text");
@@ -133,6 +135,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     dom.pendingDateFrom = document.getElementById("pending-date-from");
     dom.pendingDateTo = document.getElementById("pending-date-to");
     dom.pendingSort = document.getElementById("pending-sort");
+    dom.btnPendingClearFilters = document.getElementById("btn-pending-clear-filters");
     dom.pendingCount = document.getElementById("pending-count");
     dom.pendingList = document.getElementById("pending-list");
 
@@ -143,6 +146,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     dom.historyDateFrom = document.getElementById("history-date-from");
     dom.historyDateTo = document.getElementById("history-date-to");
     dom.historySort = document.getElementById("history-sort");
+    dom.btnHistoryClearFilters = document.getElementById("btn-history-clear-filters");
     dom.historyCount = document.getElementById("history-count");
     dom.historyList = document.getElementById("history-list");
 
@@ -166,13 +170,11 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
   }
 
   function bindEvents() {
-    const handlePendingSearch = debounce((value) => {
-      state.filters.pending.search = value.trim();
+    const handlePendingSearchRender = debounce(() => {
       renderList("pending");
     }, CONFIG.searchDebounceMs);
 
-    const handleHistorySearch = debounce((value) => {
-      state.filters.done.search = value.trim();
+    const handleHistorySearchRender = debounce(() => {
       renderList("done");
     }, CONFIG.searchDebounceMs);
 
@@ -196,7 +198,10 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     dom.btnAddRemoveImage.addEventListener("click", clearAddFormImage);
     dom.addImageInput.addEventListener("change", handleAddImageChange);
 
-    dom.pendingSearch.addEventListener("input", (event) => handlePendingSearch(event.target.value));
+    dom.pendingSearch.addEventListener("input", (event) => {
+      state.filters.pending.search = event.target.value.trim();
+      handlePendingSearchRender();
+    });
     dom.pendingDateFrom.addEventListener("change", (event) => {
       state.filters.pending.dateFrom = event.target.value;
       renderList("pending");
@@ -209,8 +214,12 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       state.filters.pending.sort = event.target.value;
       renderList("pending");
     });
+    dom.btnPendingClearFilters.addEventListener("click", () => resetFilters("pending"));
 
-    dom.historySearch.addEventListener("input", (event) => handleHistorySearch(event.target.value));
+    dom.historySearch.addEventListener("input", (event) => {
+      state.filters.done.search = event.target.value.trim();
+      handleHistorySearchRender();
+    });
     dom.historyDateFrom.addEventListener("change", (event) => {
       state.filters.done.dateFrom = event.target.value;
       renderList("done");
@@ -223,6 +232,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
       state.filters.done.sort = event.target.value;
       renderList("done");
     });
+    dom.btnHistoryClearFilters.addEventListener("click", () => resetFilters("done"));
 
     dom.pendingList.addEventListener("click", (event) => handleListClick(event, "pending"));
     dom.historyList.addEventListener("click", (event) => handleListClick(event, "done"));
@@ -237,9 +247,15 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     dom.btnConfirmSubmit.addEventListener("click", handleConfirmSubmit);
 
     document.addEventListener("keydown", handleGlobalKeydown);
+    window.addEventListener("scroll", updateTopbarScrollState, { passive: true });
     window.addEventListener("online", () => {
       void processSyncQueue({ manual: true, reason: "browser-online" });
     });
+  }
+
+  function updateTopbarScrollState() {
+    if (!dom.topbar) return;
+    dom.topbar.classList.toggle("is-scrolled", window.scrollY > 8);
   }
 
   async function bootstrap() {
@@ -1023,6 +1039,7 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     const listEl = isDoneScope ? dom.historyList : dom.pendingList;
     const countEl = isDoneScope ? dom.historyCount : dom.pendingCount;
     const filteredNotes = getFilteredAndSortedNotes(scope);
+    renderFilterControls(scope);
 
     countEl.textContent = `${filteredNotes.length} / ${notes.length} รายการ`;
 
@@ -1053,9 +1070,15 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
     const notes = (isDoneScope ? state.doneNotes : state.pendingNotes).slice();
     const filters = isDoneScope ? state.filters.done : state.filters.pending;
     const search = (filters.search || "").toLowerCase();
-    const dateFrom = filters.dateFrom || "";
-    const dateTo = filters.dateTo || "";
+    let dateFrom = filters.dateFrom || "";
+    let dateTo = filters.dateTo || "";
     const sort = filters.sort || (isDoneScope ? "NEWEST" : "OLDEST");
+
+    if (dateFrom && dateTo && dateFrom > dateTo) {
+      const tmp = dateFrom;
+      dateFrom = dateTo;
+      dateTo = tmp;
+    }
 
     const filtered = notes.filter((note) => {
       if (search) {
@@ -1070,6 +1093,48 @@ const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 
     filtered.sort((a, b) => compareNotes(a, b, sort));
     return filtered;
+  }
+
+  function renderFilterControls(scope) {
+    const isDoneScope = scope === "done";
+    const filters = isDoneScope ? state.filters.done : state.filters.pending;
+    const button = isDoneScope ? dom.btnHistoryClearFilters : dom.btnPendingClearFilters;
+    if (!button) return;
+
+    const defaultSort = isDoneScope ? "NEWEST" : "OLDEST";
+    const hasActive =
+      Boolean((filters.search || "").trim()) ||
+      Boolean(filters.dateFrom) ||
+      Boolean(filters.dateTo) ||
+      String(filters.sort || defaultSort) !== defaultSort;
+
+    button.disabled = !hasActive;
+    button.classList.toggle("is-active", hasActive);
+  }
+
+  function resetFilters(scope) {
+    const isDoneScope = scope === "done";
+    const filters = isDoneScope ? state.filters.done : state.filters.pending;
+    const defaultSort = isDoneScope ? "NEWEST" : "OLDEST";
+
+    filters.search = "";
+    filters.dateFrom = "";
+    filters.dateTo = "";
+    filters.sort = defaultSort;
+
+    if (isDoneScope) {
+      if (dom.historySearch) dom.historySearch.value = "";
+      if (dom.historyDateFrom) dom.historyDateFrom.value = "";
+      if (dom.historyDateTo) dom.historyDateTo.value = "";
+      if (dom.historySort) dom.historySort.value = defaultSort;
+      renderList("done");
+    } else {
+      if (dom.pendingSearch) dom.pendingSearch.value = "";
+      if (dom.pendingDateFrom) dom.pendingDateFrom.value = "";
+      if (dom.pendingDateTo) dom.pendingDateTo.value = "";
+      if (dom.pendingSort) dom.pendingSort.value = defaultSort;
+      renderList("pending");
+    }
   }
 
   function compareNotes(a, b, sort) {
