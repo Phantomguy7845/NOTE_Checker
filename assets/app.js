@@ -1,5 +1,6 @@
 const AUTH_STORAGE_KEY = "NOTE_APP_SESSION_TOKEN";
 const AUTH_USER_STORAGE_KEY = "NOTE_APP_CURRENT_USER";
+const AUTH_EXPIRES_AT_STORAGE_KEY = "NOTE_APP_SESSION_EXPIRES_AT";
 const API_BASE = "https://bold-rain-86f3.surakiat16082000.workers.dev";
 const imageMemoryCache = new Map();
 const imageInflightCache = new Map();
@@ -98,6 +99,11 @@ const imageInflightCache = new Map();
       noteId: "",
       busy: false,
     },
+    userMgmt: {
+      open: false,
+      creating: false,
+      error: "",
+    },
     sync: {
       queue: [],
       processing: false,
@@ -108,6 +114,7 @@ const imageInflightCache = new Map();
       token: "",
       user: null,
       users: [],
+      expiresAt: "",
       loginOpen: true,
       loginBusy: false,
       loginError: "",
@@ -152,9 +159,20 @@ const imageInflightCache = new Map();
       return;
     }
 
-    const isAuthReady = await authInitializeSession();
-    if (!isAuthReady) return;
-    await authStartAppFlow({ reason: "startup" });
+    if (authGetToken()) {
+      authSetLoginState({ loginOpen: false, loginBusy: false, sessionChecking: false, loginError: "" });
+      if (state.auth.user) {
+        await authStartAppFlow({ reason: "startup-saved-session" });
+        void validateSessionSilently();
+        return;
+      }
+      const isAuthReady = await authInitializeSession();
+      if (!isAuthReady) return;
+      await authStartAppFlow({ reason: "startup" });
+      return;
+    }
+
+    authSetLoginState({ loginOpen: true, loginBusy: false, sessionChecking: false, loginError: "" });
   }
 
   function cacheDom() {
@@ -238,6 +256,18 @@ const imageInflightCache = new Map();
     dom.confirmMeta = document.getElementById("confirm-note-meta");
     dom.btnConfirmCancel = document.getElementById("btn-confirm-cancel");
     dom.btnConfirmSubmit = document.getElementById("btn-confirm-submit");
+    dom.userMgmtBackdrop = document.getElementById("user-mgmt-backdrop");
+    dom.userMgmtShell = document.getElementById("user-mgmt-shell");
+    dom.userMgmtForm = document.getElementById("user-mgmt-form");
+    dom.userMgmtUsername = document.getElementById("user-mgmt-username");
+    dom.userMgmtPassword = document.getElementById("user-mgmt-password");
+    dom.userMgmtDisplayName = document.getElementById("user-mgmt-display-name");
+    dom.userMgmtRole = document.getElementById("user-mgmt-role");
+    dom.userMgmtIsActive = document.getElementById("user-mgmt-is-active");
+    dom.userMgmtError = document.getElementById("user-mgmt-error");
+    dom.btnUserMgmtClose = document.getElementById("btn-user-mgmt-close");
+    dom.btnUserMgmtCancel = document.getElementById("btn-user-mgmt-cancel");
+    dom.btnUserMgmtSubmit = document.getElementById("btn-user-mgmt-submit");
 
     dom.cameraBackdrop = document.getElementById("camera-backdrop");
     dom.cameraShell = document.getElementById("camera-shell");
@@ -278,9 +308,7 @@ const imageInflightCache = new Map();
       });
     }
     if (dom.btnOpenUserMgmt) {
-      dom.btnOpenUserMgmt.addEventListener("click", () => {
-        showToast("warn", "User Management (ADMIN) เตรียม hook ไว้แล้ว");
-      });
+      dom.btnOpenUserMgmt.addEventListener("click", openUserMgmtModal);
     }
     dom.btnOpenAddPage.addEventListener("click", openAddPage);
     dom.btnOpenHistory.addEventListener("click", openHistoryPanel);
@@ -394,6 +422,16 @@ const imageInflightCache = new Map();
     dom.confirmBackdrop.addEventListener("click", handleConfirmCancel);
     dom.btnConfirmCancel.addEventListener("click", handleConfirmCancel);
     dom.btnConfirmSubmit.addEventListener("click", handleConfirmSubmit);
+    if (dom.userMgmtBackdrop) dom.userMgmtBackdrop.addEventListener("click", () => closeUserMgmtModal());
+    if (dom.btnUserMgmtClose) dom.btnUserMgmtClose.addEventListener("click", () => closeUserMgmtModal());
+    if (dom.btnUserMgmtCancel) dom.btnUserMgmtCancel.addEventListener("click", () => closeUserMgmtModal());
+    if (dom.btnUserMgmtSubmit) dom.btnUserMgmtSubmit.addEventListener("click", () => void submitCreateUser());
+    if (dom.userMgmtForm) {
+      dom.userMgmtForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        void submitCreateUser();
+      });
+    }
 
     document.addEventListener("keydown", handleGlobalKeydown);
     window.addEventListener("scroll", updateTopbarScrollState, { passive: true });
@@ -441,6 +479,7 @@ const imageInflightCache = new Map();
       token: "",
       user: null,
       users: [],
+      expiresAt: "",
       loginOpen: true,
       loginBusy: false,
       loginError: "",
@@ -469,52 +508,22 @@ const imageInflightCache = new Map();
   }
 
   function authLoadSessionCache() {
-    let token = "";
-    let user = null;
-
-    try {
-      token = String(window.localStorage.getItem(AUTH_STORAGE_KEY) || "").trim();
-    } catch (error) {
-      token = "";
-    }
-
-    try {
-      const raw = window.localStorage.getItem(AUTH_USER_STORAGE_KEY) || "";
-      if (raw) {
-        user = authNormalizeUser(JSON.parse(raw));
-      }
-    } catch (error) {
-      user = null;
-    }
-
-    state.auth.token = token;
-    state.auth.user = user;
-    state.auth.loginOpen = !token;
+    const saved = loadSavedSession();
+    state.auth.token = String(saved.token || "");
+    state.auth.user = saved.user || null;
+    state.auth.expiresAt = String(saved.expiresAt || "");
+    state.auth.loginOpen = !state.auth.token;
     state.auth.loginBusy = false;
     state.auth.loginError = "";
     state.auth.sessionChecking = false;
   }
 
   function authSaveSessionCache() {
-    try {
-      if (state.auth.token) {
-        window.localStorage.setItem(AUTH_STORAGE_KEY, state.auth.token);
-      } else {
-        window.localStorage.removeItem(AUTH_STORAGE_KEY);
-      }
-    } catch (error) {
-      console.warn("Failed to save auth token", error);
-    }
-
-    try {
-      if (state.auth.user) {
-        window.localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(state.auth.user));
-      } else {
-        window.localStorage.removeItem(AUTH_USER_STORAGE_KEY);
-      }
-    } catch (error) {
-      console.warn("Failed to save auth user cache", error);
-    }
+    saveSession({
+      sessionToken: state.auth.token,
+      currentUser: state.auth.user,
+      expiresAt: state.auth.expiresAt,
+    });
   }
 
   function authSetLoginState(patch = {}) {
@@ -632,6 +641,19 @@ const imageInflightCache = new Map();
     ).trim();
   }
 
+  function authExtractExpiresAt(response) {
+    return String(
+      coalesce(
+        response && response.expiresAt,
+        response && response.sessionExpiresAt,
+        response && response.expireAt,
+        response && response.data && (response.data.expiresAt || response.data.sessionExpiresAt),
+        response && response.result && (response.result.expiresAt || response.result.sessionExpiresAt),
+        ""
+      ) || ""
+    ).trim();
+  }
+
   function authExtractUserFromResponse(response) {
     const candidate =
       (response && response.user) ||
@@ -679,6 +701,7 @@ const imageInflightCache = new Map();
       }
 
       state.auth.user = me;
+      state.auth.expiresAt = authExtractExpiresAt(meResponse) || state.auth.expiresAt || "";
       state.auth.loginOpen = false;
       state.auth.loginBusy = false;
       state.auth.sessionChecking = false;
@@ -720,11 +743,13 @@ const imageInflightCache = new Map();
 
       state.auth.token = sessionToken;
       state.auth.user = authExtractUserFromResponse(loginResponse);
+      state.auth.expiresAt = authExtractExpiresAt(loginResponse) || state.auth.expiresAt || "";
       authSaveSessionCache();
 
       if (!state.auth.user) {
         const meResponse = await apiGet("getMe");
         state.auth.user = authExtractUserFromResponse(meResponse);
+        state.auth.expiresAt = authExtractExpiresAt(meResponse) || state.auth.expiresAt || "";
       }
       if (!state.auth.user) {
         throw new Error("ไม่สามารถโหลดข้อมูลผู้ใช้ปัจจุบันได้");
@@ -795,6 +820,104 @@ const imageInflightCache = new Map();
     }
   }
 
+  function loadSavedSession() {
+    let sessionToken = "";
+    let currentUser = null;
+    let expiresAt = "";
+
+    try {
+      sessionToken = String(window.localStorage.getItem(AUTH_STORAGE_KEY) || "").trim();
+    } catch (error) {
+      sessionToken = "";
+    }
+
+    try {
+      const rawUser = window.localStorage.getItem(AUTH_USER_STORAGE_KEY) || "";
+      if (rawUser) currentUser = authNormalizeUser(JSON.parse(rawUser));
+    } catch (error) {
+      currentUser = null;
+    }
+
+    try {
+      expiresAt = String(window.localStorage.getItem(AUTH_EXPIRES_AT_STORAGE_KEY) || "").trim();
+    } catch (error) {
+      expiresAt = "";
+    }
+
+    return { token: sessionToken, user: currentUser, expiresAt };
+  }
+
+  function saveSession(session = {}) {
+    const sessionToken = String(session.sessionToken || session.token || "").trim();
+    const currentUser = authNormalizeUser(session.currentUser || session.user || null);
+    const expiresAt = String(session.expiresAt || "").trim();
+
+    try {
+      if (sessionToken) {
+        window.localStorage.setItem(AUTH_STORAGE_KEY, sessionToken);
+      } else {
+        window.localStorage.removeItem(AUTH_STORAGE_KEY);
+      }
+    } catch (error) {
+      console.warn("Failed to save auth token", error);
+    }
+
+    try {
+      if (currentUser) {
+        window.localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(currentUser));
+      } else {
+        window.localStorage.removeItem(AUTH_USER_STORAGE_KEY);
+      }
+    } catch (error) {
+      console.warn("Failed to save auth user cache", error);
+    }
+
+    try {
+      if (expiresAt) {
+        window.localStorage.setItem(AUTH_EXPIRES_AT_STORAGE_KEY, expiresAt);
+      } else {
+        window.localStorage.removeItem(AUTH_EXPIRES_AT_STORAGE_KEY);
+      }
+    } catch (error) {
+      console.warn("Failed to save auth expiresAt", error);
+    }
+  }
+
+  function clearSession() {
+    try {
+      window.localStorage.removeItem(AUTH_STORAGE_KEY);
+      window.localStorage.removeItem(AUTH_USER_STORAGE_KEY);
+      window.localStorage.removeItem(AUTH_EXPIRES_AT_STORAGE_KEY);
+    } catch (error) {
+      console.warn("Failed to clear auth session cache", error);
+    }
+  }
+
+  async function validateSessionSilently() {
+    if (!authGetToken()) return false;
+    try {
+      const meResponse = await apiGet("getMe");
+      const me = authExtractUserFromResponse(meResponse);
+      if (!me) throw new Error("Session invalid");
+      state.auth.user = me;
+      state.auth.expiresAt = authExtractExpiresAt(meResponse) || state.auth.expiresAt || "";
+      authSaveSessionCache();
+      authRenderHeader();
+      authRenderLoginOverlay();
+      void authLoadUsers();
+      return true;
+    } catch (error) {
+      if (state.auth.handlingUnauthorized) return false;
+      await authLogout({
+        source: "validate-session",
+        skipApi: true,
+        silent: true,
+        loginError: "Session ไม่ถูกต้องหรือหมดอายุ",
+      });
+      return false;
+    }
+  }
+
   async function authLogout(options = {}) {
     const source = String(options.source || "");
     const token = authGetToken();
@@ -824,7 +947,7 @@ const imageInflightCache = new Map();
       handlingUnauthorized: state.auth.handlingUnauthorized,
       loginError: String(options.loginError || ""),
     };
-    authSaveSessionCache();
+    clearSession();
     authRenderHeader();
     authRenderLoginOverlay();
     userFilterRenderUserOptions();
@@ -843,6 +966,9 @@ const imageInflightCache = new Map();
     renderList("done");
 
     if (dom.authPassword) dom.authPassword.value = "";
+    if (state.userMgmt.open) {
+      closeUserMgmtModal({ force: true });
+    }
 
     if (!options.silent && source === "manual") {
       showToast("success", "ออกจากระบบแล้ว");
@@ -3530,6 +3656,120 @@ const imageInflightCache = new Map();
     syncBodyScrollLock();
   }
 
+  // === AUTH PATCH START ===
+  function openUserMgmtModal() {
+    if (!authIsAdmin()) {
+      showToast("warn", "เฉพาะ ADMIN เท่านั้น");
+      return;
+    }
+    if (!dom.userMgmtShell || !dom.userMgmtBackdrop) {
+      showToast("warn", "User Management UI ไม่พร้อมใช้งาน");
+      return;
+    }
+
+    state.userMgmt.open = true;
+    state.userMgmt.creating = false;
+    state.userMgmt.error = "";
+    renderUserMgmtModalState();
+    showModalElements(dom.userMgmtBackdrop, dom.userMgmtShell);
+    dom.userMgmtShell.setAttribute("aria-hidden", "false");
+    dom.userMgmtBackdrop.setAttribute("aria-hidden", "false");
+    syncBodyScrollLock();
+
+    window.setTimeout(() => {
+      if (state.userMgmt.open && dom.userMgmtUsername) dom.userMgmtUsername.focus();
+    }, CONFIG.modalTransitionMs);
+  }
+
+  function closeUserMgmtModal(options = {}) {
+    if (!state.userMgmt.open) return;
+    if (!options.force && state.userMgmt.creating) return;
+
+    state.userMgmt.open = false;
+    state.userMgmt.creating = false;
+    state.userMgmt.error = "";
+    renderUserMgmtModalState();
+    hideModalElements(dom.userMgmtBackdrop, dom.userMgmtShell);
+    dom.userMgmtShell.setAttribute("aria-hidden", "true");
+    dom.userMgmtBackdrop.setAttribute("aria-hidden", "true");
+    syncBodyScrollLock();
+  }
+
+  function renderUserMgmtModalState() {
+    if (!dom.userMgmtShell) return;
+
+    const busy = Boolean(state.userMgmt.creating);
+    if (dom.userMgmtUsername) dom.userMgmtUsername.disabled = busy;
+    if (dom.userMgmtPassword) dom.userMgmtPassword.disabled = busy;
+    if (dom.userMgmtDisplayName) dom.userMgmtDisplayName.disabled = busy;
+    if (dom.userMgmtRole) dom.userMgmtRole.disabled = busy;
+    if (dom.userMgmtIsActive) dom.userMgmtIsActive.disabled = busy;
+    if (dom.btnUserMgmtClose) dom.btnUserMgmtClose.disabled = busy;
+    if (dom.btnUserMgmtCancel) dom.btnUserMgmtCancel.disabled = busy;
+    if (dom.btnUserMgmtSubmit) {
+      dom.btnUserMgmtSubmit.disabled = busy;
+      if (!dom.btnUserMgmtSubmit.dataset.defaultLabel) {
+        dom.btnUserMgmtSubmit.dataset.defaultLabel = dom.btnUserMgmtSubmit.textContent || "สร้างผู้ใช้";
+      }
+      dom.btnUserMgmtSubmit.textContent = busy
+        ? "กำลังสร้าง..."
+        : (dom.btnUserMgmtSubmit.dataset.defaultLabel || "สร้างผู้ใช้");
+    }
+
+    if (dom.userMgmtError) {
+      const message = String(state.userMgmt.error || "");
+      dom.userMgmtError.textContent = message;
+      dom.userMgmtError.classList.toggle("hidden", !message);
+    }
+  }
+
+  async function submitCreateUser() {
+    if (!state.userMgmt.open || state.userMgmt.creating) return;
+    if (!authIsAdmin()) {
+      showToast("warn", "เฉพาะ ADMIN เท่านั้น");
+      return;
+    }
+
+    const username = String((dom.userMgmtUsername && dom.userMgmtUsername.value) || "").trim();
+    const password = String((dom.userMgmtPassword && dom.userMgmtPassword.value) || "");
+    const displayName = String((dom.userMgmtDisplayName && dom.userMgmtDisplayName.value) || "").trim();
+    const role = String((dom.userMgmtRole && dom.userMgmtRole.value) || "USER").trim().toUpperCase() === "ADMIN"
+      ? "ADMIN"
+      : "USER";
+    const isActive = String((dom.userMgmtIsActive && dom.userMgmtIsActive.value) || "true") !== "false";
+
+    if (!username || !password || !displayName) {
+      state.userMgmt.error = "กรุณากรอก username, password และ displayName";
+      renderUserMgmtModalState();
+      return;
+    }
+
+    state.userMgmt.creating = true;
+    state.userMgmt.error = "";
+    renderUserMgmtModalState();
+
+    try {
+      await apiPost("createUser", { username, password, displayName, role, isActive });
+      showToast("success", "สร้างผู้ใช้เรียบร้อย");
+      if (dom.userMgmtForm) dom.userMgmtForm.reset();
+      if (dom.userMgmtRole) dom.userMgmtRole.value = "USER";
+      if (dom.userMgmtIsActive) dom.userMgmtIsActive.value = "true";
+      closeUserMgmtModal({ force: true });
+      await authLoadUsers();
+    } catch (error) {
+      const message = getErrorMessage(error);
+      state.userMgmt.creating = false;
+      state.userMgmt.error = /unknown.*createuser|not found|unknown post action/i.test(message)
+        ? "Backend ยังไม่รองรับ createUser endpoint"
+        : message;
+      renderUserMgmtModalState();
+      if (/unknown.*createuser|not found|unknown post action/i.test(message)) {
+        showToast("warn", "createUser endpoint ยังไม่พร้อมใช้งาน");
+      }
+    }
+  }
+  // === AUTH PATCH END ===
+
   function renderConfirmModalState() {
     dom.btnConfirmCancel.disabled = state.confirm.busy;
     dom.btnConfirmSubmit.disabled = state.confirm.busy;
@@ -3583,6 +3823,10 @@ const imageInflightCache = new Map();
       closeCameraModal();
       return;
     }
+    if (state.userMgmt.open) {
+      closeUserMgmtModal();
+      return;
+    }
     if (state.confirm.open) {
       if (!state.confirm.busy) closeConfirmModal();
       return;
@@ -3602,7 +3846,13 @@ const imageInflightCache = new Map();
 
   function syncBodyScrollLock() {
     const shouldLock =
-      state.sidebar.open || state.noteModal.open || state.confirm.open || state.addPage.open || state.camera.open || state.auth.loginOpen;
+      state.sidebar.open ||
+      state.noteModal.open ||
+      state.confirm.open ||
+      state.addPage.open ||
+      state.camera.open ||
+      state.userMgmt.open ||
+      state.auth.loginOpen;
     dom.body.classList.toggle("no-scroll", shouldLock);
   }
 

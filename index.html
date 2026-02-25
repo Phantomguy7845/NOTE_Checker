@@ -37,7 +37,7 @@
 
       <div class="topbar__actions">
         <button type="button" class="btn btn--ghost btn--sm hidden" id="btn-retry-sync">ส่งคิวอีกครั้ง</button>
-        <button type="button" class="btn btn--ghost btn--sm hidden" id="btn-open-user-mgmt">ผู้ใช้</button>
+        <button type="button" class="btn btn--ghost btn--sm hidden" id="btn-open-user-mgmt">Add User</button>
         <button type="button" class="btn btn--ghost btn--sm" id="btn-refresh-all">รีเฟรช</button>
         <button type="button" class="btn btn--ghost btn--sm hidden" id="btn-auth-logout">ออกจากระบบ</button>
         <button
@@ -400,6 +400,56 @@
         <p id="auth-login-error" class="auth-login-error hidden" role="alert"></p>
         <button type="submit" class="btn btn--primary btn--block" id="btn-auth-login">เข้าสู่ระบบ</button>
       </form>
+    </section>
+  </div>
+
+  <div id="user-mgmt-backdrop" class="overlay hidden" aria-hidden="true"></div>
+  <div id="user-mgmt-shell" class="modal-shell hidden" aria-hidden="true">
+    <section class="modal-card modal-card--sm" role="dialog" aria-modal="true" aria-labelledby="user-mgmt-heading">
+      <div class="modal-card__header modal-card__header--compact">
+        <div>
+          <h2 id="user-mgmt-heading">Add User</h2>
+          <p>สำหรับผู้ใช้สิทธิ์ ADMIN</p>
+        </div>
+        <button type="button" class="icon-btn" id="btn-user-mgmt-close" aria-label="ปิดหน้าต่าง Add User">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-card__body">
+        <form id="user-mgmt-form" class="form-stack" novalidate>
+          <label class="field">
+            <span class="field__label">Username *</span>
+            <input id="user-mgmt-username" type="text" autocomplete="off" required>
+          </label>
+          <label class="field">
+            <span class="field__label">Password *</span>
+            <input id="user-mgmt-password" type="password" autocomplete="new-password" required>
+          </label>
+          <label class="field">
+            <span class="field__label">Display Name *</span>
+            <input id="user-mgmt-display-name" type="text" required>
+          </label>
+          <label class="field">
+            <span class="field__label">Role</span>
+            <select id="user-mgmt-role">
+              <option value="USER">USER</option>
+              <option value="ADMIN">ADMIN</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field__label">สถานะ</span>
+            <select id="user-mgmt-is-active">
+              <option value="true">Active</option>
+              <option value="false">Inactive</option>
+            </select>
+          </label>
+          <p id="user-mgmt-error" class="auth-login-error hidden" role="alert"></p>
+        </form>
+      </div>
+      <div class="modal-card__footer">
+        <button type="button" class="btn btn--ghost" id="btn-user-mgmt-cancel">ยกเลิก</button>
+        <button type="button" class="btn btn--primary" id="btn-user-mgmt-submit">สร้างผู้ใช้</button>
+      </div>
     </section>
   </div>
 
