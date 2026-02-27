@@ -453,6 +453,18 @@
             </div>
             <ul id="dashboard-by-role" class="dashboard-list"></ul>
           </section>
+          <section class="panel panel--dashboard-sub">
+            <div class="panel__header">
+              <h3>KPI</h3>
+            </div>
+            <ul id="dashboard-kpi-list" class="dashboard-list"></ul>
+          </section>
+          <section class="panel panel--dashboard-sub">
+            <div class="panel__header">
+              <h3>7 Day Trend</h3>
+            </div>
+            <ul id="dashboard-trend-list" class="dashboard-list"></ul>
+          </section>
           <section class="panel panel--dashboard-sub panel--dashboard-sub-wide">
             <div class="panel__header">
               <h3>By User</h3>
@@ -531,6 +543,25 @@
         <div class="confirm-note-box" id="confirm-note-box">
           <p id="confirm-note-title" class="confirm-note-box__title">-</p>
           <p id="confirm-note-meta" class="confirm-note-box__meta">-</p>
+        </div>
+        <div class="field">
+          <span class="field__label">รูปประกอบตอนเช็กงาน (ไม่บังคับ)</span>
+          <input id="confirm-image-input" type="file" accept="image/*" class="hidden-input">
+          <div class="inline-row">
+            <button type="button" class="btn btn--secondary btn--sm" id="btn-confirm-open-camera">ถ่ายรูป</button>
+            <button type="button" class="btn btn--outline btn--sm" id="btn-confirm-pick-image">เลือกรูป</button>
+            <button type="button" class="btn btn--danger-soft btn--sm btn--push-end" id="btn-confirm-remove-image" disabled>ลบรูป</button>
+          </div>
+          <p class="field__hint">รูปจะถูกใส่ timestamp และบีบอัดก่อนส่ง</p>
+        </div>
+        <div class="image-preview-card" id="confirm-image-preview-card" data-empty="true">
+          <div class="image-preview-card__frame">
+            <img id="confirm-image-preview" alt="ตัวอย่างรูปตอนเช็กงาน" hidden>
+            <div id="confirm-image-placeholder" class="image-placeholder">ยังไม่ได้เลือกรูป</div>
+          </div>
+          <div class="image-preview-card__meta">
+            <p id="confirm-image-meta">แนบรูปเพื่อเป็นหลักฐานการเช็กงาน (ไม่บังคับ)</p>
+          </div>
         </div>
       </div>
       <div class="modal-card__footer">
@@ -725,6 +756,6 @@
 
   <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
 
-  <script src="assets/app.js?v=20260225a"></script>
+  <script src="assets/app.js?v=20260227b"></script>
 </body>
 </html>

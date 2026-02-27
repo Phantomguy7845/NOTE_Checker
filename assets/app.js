@@ -104,6 +104,8 @@ const imageInflightCache = new Map();
       open: false,
       noteId: "",
       busy: false,
+      compressing: false,
+      image: null,
     },
     userMgmt: {
       open: false,
@@ -317,6 +319,8 @@ const imageInflightCache = new Map();
     dom.dashboardUsersCount = document.getElementById("dashboard-users-count");
     dom.dashboardByStatus = document.getElementById("dashboard-by-status");
     dom.dashboardByRole = document.getElementById("dashboard-by-role");
+    dom.dashboardKpiList = document.getElementById("dashboard-kpi-list");
+    dom.dashboardTrendList = document.getElementById("dashboard-trend-list");
     dom.dashboardByUser = document.getElementById("dashboard-by-user");
 
     dom.noteModalBackdrop = document.getElementById("note-modal-backdrop");
@@ -330,6 +334,14 @@ const imageInflightCache = new Map();
     dom.confirmShell = document.getElementById("confirm-shell");
     dom.confirmTitle = document.getElementById("confirm-note-title");
     dom.confirmMeta = document.getElementById("confirm-note-meta");
+    dom.confirmImageInput = document.getElementById("confirm-image-input");
+    dom.btnConfirmOpenCamera = document.getElementById("btn-confirm-open-camera");
+    dom.btnConfirmPickImage = document.getElementById("btn-confirm-pick-image");
+    dom.btnConfirmRemoveImage = document.getElementById("btn-confirm-remove-image");
+    dom.confirmImagePreviewCard = document.getElementById("confirm-image-preview-card");
+    dom.confirmImagePreview = document.getElementById("confirm-image-preview");
+    dom.confirmImagePlaceholder = document.getElementById("confirm-image-placeholder");
+    dom.confirmImageMeta = document.getElementById("confirm-image-meta");
     dom.btnConfirmCancel = document.getElementById("btn-confirm-cancel");
     dom.btnConfirmSubmit = document.getElementById("btn-confirm-submit");
     dom.userMgmtBackdrop = document.getElementById("user-mgmt-backdrop");
@@ -638,6 +650,21 @@ const imageInflightCache = new Map();
     dom.confirmBackdrop.addEventListener("click", handleConfirmCancel);
     dom.btnConfirmCancel.addEventListener("click", handleConfirmCancel);
     dom.btnConfirmSubmit.addEventListener("click", handleConfirmSubmit);
+    if (dom.btnConfirmPickImage) {
+      dom.btnConfirmPickImage.addEventListener("click", () => {
+        if (!dom.confirmImageInput || state.confirm.busy || state.confirm.compressing) return;
+        dom.confirmImageInput.click();
+      });
+    }
+    if (dom.btnConfirmOpenCamera) {
+      dom.btnConfirmOpenCamera.addEventListener("click", () => void openCameraModal("checklist"));
+    }
+    if (dom.btnConfirmRemoveImage) {
+      dom.btnConfirmRemoveImage.addEventListener("click", () => clearConfirmImage());
+    }
+    if (dom.confirmImageInput) {
+      dom.confirmImageInput.addEventListener("change", handleConfirmImageChange);
+    }
     if (dom.userMgmtBackdrop) dom.userMgmtBackdrop.addEventListener("click", () => closeUserMgmtModal());
     if (dom.btnUserMgmtClose) dom.btnUserMgmtClose.addEventListener("click", () => closeUserMgmtModal());
     if (dom.btnUserMgmtCancel) dom.btnUserMgmtCancel.addEventListener("click", () => closeUserMgmtModal());
@@ -1754,6 +1781,112 @@ const imageInflightCache = new Map();
     return null;
   }
 
+  function dashboardExtractNotesFromResponse(response) {
+    const items = extractNoteArray(response);
+    return items.map((item) => normalizeNote(item || {})).filter((note) => note && note.noteId);
+  }
+
+  function dashboardBuildInsightsFromNotes(notes) {
+    const rows = Array.isArray(notes) ? notes : [];
+    const total = rows.length;
+    const doneRows = rows.filter((n) => normalizeStatus(n.status) === "DONE");
+    const pendingRows = rows.filter((n) => normalizeStatus(n.status) !== "DONE");
+
+    const completionRate = total ? ((doneRows.length / total) * 100).toFixed(1) : "0.0";
+    const overduePending = pendingRows.filter((n) => {
+      const createdMs = toTimestamp(n.createdAt);
+      if (!createdMs) return false;
+      return (Date.now() - createdMs) >= (3 * 24 * 60 * 60 * 1000);
+    }).length;
+
+    const avgCloseMsSource = doneRows
+      .map((n) => {
+        const createdMs = toTimestamp(n.createdAt);
+        const checkedMs = toTimestamp(n.checkedAt);
+        if (!createdMs || !checkedMs || checkedMs < createdMs) return 0;
+        return checkedMs - createdMs;
+      })
+      .filter((ms) => ms > 0);
+    const avgCloseMs = avgCloseMsSource.length
+      ? Math.round(avgCloseMsSource.reduce((a, b) => a + b, 0) / avgCloseMsSource.length)
+      : 0;
+
+    const todayKey = toLocalDateInputValue(new Date());
+    const createdToday = rows.filter((n) => toLocalDateInputValue(n.createdAt) === todayKey).length;
+
+    const trendMap = new Map();
+    const dayKeys = [];
+    for (let i = 6; i >= 0; i -= 1) {
+      const dt = new Date();
+      dt.setHours(0, 0, 0, 0);
+      dt.setDate(dt.getDate() - i);
+      const key = toLocalDateInputValue(dt);
+      dayKeys.push(key);
+      trendMap.set(key, { created: 0, done: 0 });
+    }
+
+    rows.forEach((note) => {
+      const createdKey = toLocalDateInputValue(note.createdAt);
+      if (createdKey && trendMap.has(createdKey)) {
+        trendMap.get(createdKey).created += 1;
+      }
+      const checkedKey = toLocalDateInputValue(note.checkedAt);
+      if (checkedKey && trendMap.has(checkedKey)) {
+        trendMap.get(checkedKey).done += 1;
+      }
+    });
+
+    const trend7d = dayKeys.map((key) => {
+      const row = trendMap.get(key) || { created: 0, done: 0 };
+      const date = parseDate(`${key}T00:00:00`);
+      const label = date
+        ? new Intl.DateTimeFormat("th-TH", { month: "2-digit", day: "2-digit" }).format(date)
+        : key;
+      return {
+        dateKey: key,
+        label,
+        created: row.created,
+        done: row.done,
+        count: row.created + row.done,
+      };
+    });
+
+    return {
+      kpis: [
+        {
+          label: "อัตราปิดงาน",
+          count: `${completionRate}%`,
+          meta: `${doneRows.length} / ${total} รายการ`,
+        },
+        {
+          label: "ค้างเกิน 3 วัน",
+          count: overduePending,
+          meta: "เฉพาะ PENDING",
+        },
+        {
+          label: "เวลาปิดเฉลี่ย",
+          count: formatDurationCompact(avgCloseMs),
+          meta: avgCloseMsSource.length ? "จากรายการ DONE" : "ยังไม่มีข้อมูล",
+        },
+        {
+          label: "สร้างวันนี้",
+          count: createdToday,
+          meta: "อิง createdAt",
+        },
+      ],
+      trend7d,
+    };
+  }
+
+  function formatDurationCompact(milliseconds) {
+    const ms = Number(milliseconds || 0);
+    if (!ms) return "-";
+    const totalHours = ms / (60 * 60 * 1000);
+    if (totalHours < 24) return `${totalHours.toFixed(1)} ชม.`;
+    const totalDays = totalHours / 24;
+    return `${totalDays.toFixed(1)} วัน`;
+  }
+
   async function openDashboardModal() {
     if (!dashboardCanOpen()) {
       showToast("warn", "กรุณาเข้าสู่ระบบก่อน");
@@ -1794,9 +1927,15 @@ const imageInflightCache = new Map();
     dashboardRender();
 
     try {
-      const response = await apiGet("getDashboardSummary", dashboardBuildApiParams());
+      const params = dashboardBuildApiParams();
+      const [response, notesResponse] = await Promise.all([
+        apiGet("getDashboardSummary", params),
+        apiGet("getNotes", params).catch(() => null),
+      ]);
       const data = dashboardExtractResponseData(response);
       if (!data) throw new Error("รูปแบบข้อมูล Dashboard ไม่ถูกต้อง");
+      const notes = notesResponse ? dashboardExtractNotesFromResponse(notesResponse) : [];
+      data.insights = dashboardBuildInsightsFromNotes(notes);
       state.dashboard.data = data;
       state.dashboard.error = "";
     } catch (error) {
@@ -1849,6 +1988,19 @@ const imageInflightCache = new Map();
       label: String(item && item.role || "-"),
       count: Number(item && item.count || 0),
       meta: "",
+    }));
+
+    const insights = data.insights || {};
+    dashboardRenderSimpleList(dom.dashboardKpiList, insights.kpis, loading, (item) => ({
+      label: String(item && item.label || "-"),
+      count: item && Object.prototype.hasOwnProperty.call(item, "count") ? item.count : "-",
+      meta: String(item && item.meta || ""),
+    }));
+
+    dashboardRenderSimpleList(dom.dashboardTrendList, insights.trend7d, loading, (item) => ({
+      label: String(item && item.label || "-"),
+      count: Number(item && item.count || 0),
+      meta: `สร้าง ${Number(item && item.created || 0)} • เสร็จ ${Number(item && item.done || 0)}`,
     }));
 
     dashboardRenderSimpleList(dom.dashboardByUser, breakdown.byUser, loading, (item) => ({
@@ -2956,6 +3108,7 @@ const imageInflightCache = new Map();
       const data = payload.data && typeof payload.data === "object" ? payload.data : {};
       const beforeNote = noteId ? cloneNoteForUi(getLocalNoteById(noteId) || {}) : null;
       const oldImageFileId = String(beforeNote && beforeNote.imageFileId || "");
+      let autoMarkDoneQueued = false;
       const response = await apiPost("updateNote", payload);
       const rawItem = extractNoteDetail(response);
       let updatedNote = null;
@@ -3022,8 +3175,42 @@ const imageInflightCache = new Map();
 
         setLocalNoteCache(cachedNote, { skipRebuild: true });
         await cacheNoteMetaToIdb(cachedNote);
+
+        if (queueItem.meta && queueItem.meta.autoMarkDone === true) {
+          const checkedAt = String(queueItem.meta.checkedAt || new Date().toISOString());
+          enqueueSyncOperation({
+            type: "markDone",
+            payload: { noteId: updatedNote.noteId },
+            localNote: {
+              ...cloneNoteForUi(cachedNote),
+              status: "DONE",
+              checkedAt,
+            },
+            meta: { checkedAt },
+          });
+          autoMarkDoneQueued = true;
+        }
       } else if (oldImageFileId && data.removeImage === true && !data.imageDataUrl && !data.imageBase64) {
         await deleteImageCacheEverywhere(oldImageFileId);
+      }
+
+      if (queueItem.meta && queueItem.meta.autoMarkDone === true && !autoMarkDoneQueued) {
+        const fallbackNoteId = String(updatedNote && updatedNote.noteId || noteId || "");
+        if (fallbackNoteId) {
+          const checkedAt = String(queueItem.meta.checkedAt || new Date().toISOString());
+          const localSnapshot = cloneNoteForUi(getLocalNoteById(fallbackNoteId) || {});
+          enqueueSyncOperation({
+            type: "markDone",
+            payload: { noteId: fallbackNoteId },
+            localNote: {
+              ...localSnapshot,
+              noteId: fallbackNoteId,
+              status: "DONE",
+              checkedAt,
+            },
+            meta: { checkedAt },
+          });
+        }
       }
 
       rebuildVisibleNotesFromSources();
@@ -3202,12 +3389,14 @@ const imageInflightCache = new Map();
   }
 
   async function openCameraModal(target = "add") {
-    const cameraTarget = target === "edit" ? "edit" : "add";
+    const cameraTarget = target === "edit" ? "edit" : target === "checklist" ? "checklist" : "add";
     if (cameraTarget === "add") {
       if (state.addForm.saving || state.addForm.compressing) return;
-    } else {
+    } else if (cameraTarget === "edit") {
       const draft = state.noteModal.editDraft;
       if (!draft || state.noteModal.saving || draft.compressing) return;
+    } else if (cameraTarget === "checklist") {
+      if (!state.confirm.open || state.confirm.busy || state.confirm.compressing) return;
     }
     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
       showToast("error", "เบราว์เซอร์นี้ไม่รองรับกล้อง กรุณาใช้ปุ่มเลือกรูป");
@@ -3337,10 +3526,12 @@ const imageInflightCache = new Map();
       const blob = await canvasToBlob(canvas, "image/jpeg", 0.95);
       const file = new File([blob], `camera-${Date.now()}.jpg`, { type: "image/jpeg" });
 
-      const target = state.camera.target === "edit" ? "edit" : "add";
+      const target = state.camera.target === "edit" ? "edit" : state.camera.target === "checklist" ? "checklist" : "add";
       closeCameraModal({ force: true });
       if (target === "edit") {
         await processEditImageFile(file);
+      } else if (target === "checklist") {
+        await processConfirmImageFile(file);
       } else {
         await processAddImageFile(file);
       }
@@ -4684,6 +4875,8 @@ const imageInflightCache = new Map();
     state.confirm.open = true;
     state.confirm.noteId = String(noteId);
     state.confirm.busy = false;
+    state.confirm.compressing = false;
+    state.confirm.image = null;
 
     dom.confirmTitle.textContent = note ? note.title || "(ไม่มีหัวข้อ)" : `NOTE ID: ${noteId}`;
     dom.confirmMeta.textContent = note
@@ -4698,20 +4891,103 @@ const imageInflightCache = new Map();
   }
 
   function handleConfirmCancel() {
-    if (state.confirm.busy) return;
+    if (state.confirm.busy || state.confirm.compressing) return;
     closeConfirmModal();
   }
 
   function closeConfirmModal() {
     if (!state.confirm.open) return;
+    if (state.camera.open && state.camera.target === "checklist") {
+      closeCameraModal({ force: true });
+    }
     state.confirm.open = false;
     state.confirm.busy = false;
+    state.confirm.compressing = false;
     state.confirm.noteId = "";
+    state.confirm.image = null;
+    if (dom.confirmImageInput) dom.confirmImageInput.value = "";
     renderConfirmModalState();
+    releaseFocusBeforeHide(dom.confirmShell, dom.pendingList || dom.btnOpenHistory);
     hideModalElements(dom.confirmBackdrop, dom.confirmShell);
     dom.confirmShell.setAttribute("aria-hidden", "true");
     dom.confirmBackdrop.setAttribute("aria-hidden", "true");
     syncBodyScrollLock();
+  }
+
+  async function handleConfirmImageChange(event) {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    event.target.value = "";
+    await processConfirmImageFile(file);
+  }
+
+  async function processConfirmImageFile(file) {
+    if (!file || !state.confirm.open) return;
+    if (!file.type.startsWith("image/")) {
+      showToast("error", "กรุณาเลือกไฟล์รูปภาพเท่านั้น");
+      return;
+    }
+
+    state.confirm.compressing = true;
+    renderConfirmModalState();
+    try {
+      const compressed = await compressImageFile(file);
+      state.confirm.image = {
+        dataUrl: compressed.dataUrl,
+        imageName: compressed.imageName,
+        imageMimeType: compressed.imageMimeType,
+        stats: compressed.stats,
+      };
+      showToast("success", "เตรียมรูปตอนเช็กงานแล้ว");
+    } catch (error) {
+      state.confirm.image = null;
+      showToast("error", `เตรียมรูปไม่สำเร็จ: ${getErrorMessage(error)}`);
+    } finally {
+      state.confirm.compressing = false;
+      renderConfirmModalState();
+    }
+  }
+
+  function clearConfirmImage(options = {}) {
+    state.confirm.image = null;
+    state.confirm.compressing = false;
+    if (dom.confirmImageInput) dom.confirmImageInput.value = "";
+    renderConfirmModalState();
+    if (!options.silent) {
+      showToast("warn", "ลบรูปที่แนบตอนเช็กงานแล้ว");
+    }
+  }
+
+  function renderConfirmImagePreview() {
+    if (!dom.confirmImagePreviewCard || !dom.confirmImagePreview || !dom.confirmImagePlaceholder || !dom.confirmImageMeta) return;
+    const image = state.confirm.image;
+
+    if (state.confirm.compressing) {
+      dom.confirmImagePreviewCard.dataset.empty = "true";
+      dom.confirmImagePreview.hidden = true;
+      dom.confirmImagePreview.removeAttribute("src");
+      dom.confirmImagePlaceholder.hidden = false;
+      dom.confirmImagePlaceholder.innerHTML =
+        '<span class="inline-spinner"><span class="spinner" aria-hidden="true"></span>กำลังบีบอัดรูป...</span>';
+      dom.confirmImageMeta.textContent = "กำลังประมวลผลรูปภาพ";
+      return;
+    }
+
+    dom.confirmImagePlaceholder.innerHTML = "ยังไม่ได้เลือกรูป";
+    if (!image) {
+      dom.confirmImagePreviewCard.dataset.empty = "true";
+      dom.confirmImagePreview.hidden = true;
+      dom.confirmImagePreview.removeAttribute("src");
+      dom.confirmImagePlaceholder.hidden = false;
+      dom.confirmImageMeta.textContent = "แนบรูปเพื่อเป็นหลักฐานการเช็กงาน (ไม่บังคับ)";
+      return;
+    }
+
+    dom.confirmImagePreviewCard.dataset.empty = "false";
+    dom.confirmImagePreview.src = image.dataUrl;
+    dom.confirmImagePreview.hidden = false;
+    dom.confirmImagePlaceholder.hidden = true;
+    dom.confirmImageMeta.textContent = buildCompressionStatsText(image.stats);
   }
 
   // === AUTH PATCH START ===
@@ -5171,13 +5447,18 @@ const imageInflightCache = new Map();
   // === AUTH PATCH END ===
 
   function renderConfirmModalState() {
-    dom.btnConfirmCancel.disabled = state.confirm.busy;
-    dom.btnConfirmSubmit.disabled = state.confirm.busy;
+    const busy = Boolean(state.confirm.busy || state.confirm.compressing);
+    dom.btnConfirmCancel.disabled = busy;
+    dom.btnConfirmSubmit.disabled = busy;
     dom.btnConfirmSubmit.textContent = state.confirm.busy ? "กำลังยืนยัน..." : "ยืนยัน";
+    if (dom.btnConfirmOpenCamera) dom.btnConfirmOpenCamera.disabled = busy;
+    if (dom.btnConfirmPickImage) dom.btnConfirmPickImage.disabled = busy;
+    if (dom.btnConfirmRemoveImage) dom.btnConfirmRemoveImage.disabled = busy || !state.confirm.image;
+    renderConfirmImagePreview();
   }
 
   async function handleConfirmSubmit() {
-    if (state.confirm.busy) return;
+    if (state.confirm.busy || state.confirm.compressing) return;
     if (!state.confirm.noteId) return;
 
     state.confirm.busy = true;
@@ -5192,22 +5473,62 @@ const imageInflightCache = new Map();
       }
 
       removeLocalNoteCache(noteId, { skipRebuild: true });
+      const checkedAt = new Date().toISOString();
+      const checklistImage = state.confirm.image ? { ...state.confirm.image } : null;
 
-      enqueueSyncOperation({
-        type: "markDone",
-        payload: { noteId },
-        localNote: noteSnapshot ? cloneNoteForUi(noteSnapshot) : null,
-        meta: {
-          checkedAt: new Date().toISOString(),
-        },
-      });
+      const noteSnapshotWithChecklistImage = noteSnapshot
+        ? {
+            ...cloneNoteForUi(noteSnapshot),
+            ...(checklistImage
+              ? {
+                  hasImage: true,
+                  imageMimeType: checklistImage.imageMimeType,
+                  imageName: checklistImage.imageName,
+                  __localImageDataUrl: checklistImage.dataUrl,
+                }
+              : {}),
+          }
+        : null;
+
+      if (checklistImage) {
+        enqueueSyncOperation({
+          type: "update",
+          payload: {
+            noteId,
+            data: {
+              imageDataUrl: checklistImage.dataUrl,
+              imageName: checklistImage.imageName,
+              imageMimeType: checklistImage.imageMimeType,
+            },
+          },
+          localNote: noteSnapshotWithChecklistImage,
+          meta: {
+            autoMarkDone: true,
+            checkedAt,
+          },
+        });
+      } else {
+        enqueueSyncOperation({
+          type: "markDone",
+          payload: { noteId },
+          localNote: noteSnapshot ? cloneNoteForUi(noteSnapshot) : null,
+          meta: {
+            checkedAt,
+          },
+        });
+      }
 
       if (state.noteModal.open && String(state.noteModal.noteId) === String(noteId)) {
         closeNoteModal();
       }
 
       closeConfirmModal();
-      showToast("success", "ย้ายในเครื่องแล้ว กำลังส่งอัปเดตสถานะ...");
+      showToast(
+        "success",
+        checklistImage
+          ? "บันทึกรูปในเครื่องแล้ว กำลังส่งอัปเดตรูปและสถานะ..."
+          : "ย้ายในเครื่องแล้ว กำลังส่งอัปเดตสถานะ..."
+      );
       void processSyncQueue({ reason: "mark-done-submit" });
     } catch (error) {
       state.confirm.busy = false;
@@ -5244,7 +5565,7 @@ const imageInflightCache = new Map();
       return;
     }
     if (state.confirm.open) {
-      if (!state.confirm.busy) closeConfirmModal();
+      if (!state.confirm.busy && !state.confirm.compressing) closeConfirmModal();
       return;
     }
     if (state.noteModal.open) {
