@@ -40,6 +40,10 @@ const imageInflightCache = new Map();
       done: false,
       refreshAll: false,
     },
+    apiMeta: {
+      version: "",
+      supportsCheckedChecklistImage: false,
+    },
     errors: {
       pending: "",
       done: "",
@@ -94,6 +98,11 @@ const imageInflightCache = new Map();
       saving: false,
       requestToken: 0,
       image: {
+        status: "idle",
+        dataUrl: "",
+        message: "",
+      },
+      checkedImage: {
         status: "idle",
         dataUrl: "",
         message: "",
@@ -653,6 +662,10 @@ const imageInflightCache = new Map();
     if (dom.btnConfirmPickImage) {
       dom.btnConfirmPickImage.addEventListener("click", () => {
         if (!dom.confirmImageInput || state.confirm.busy || state.confirm.compressing) return;
+        if (!state.apiMeta.supportsCheckedChecklistImage) {
+          showToast("warn", "ต้องอัปเดต backend ก่อน จึงจะแนบรูปตอนเช็กงานได้");
+          return;
+        }
         dom.confirmImageInput.click();
       });
     }
@@ -2091,12 +2104,39 @@ const imageInflightCache = new Map();
     try {
       const response = await apiGet("health");
       const text = extractHealthText(response);
+      state.apiMeta.version = String((response && response.version) || "");
+      state.apiMeta.supportsCheckedChecklistImage = apiSupportsCheckedChecklistImage(response);
       setApiStatus("online", text || "API: พร้อมใช้งาน");
       return response;
     } catch (error) {
+      state.apiMeta.version = "";
+      state.apiMeta.supportsCheckedChecklistImage = false;
       setApiStatus("error", `API: ${getErrorMessage(error)}`);
       throw error;
     }
+  }
+
+  function apiSupportsCheckedChecklistImage(response) {
+    const explicit =
+      response &&
+      response.capabilities &&
+      (response.capabilities.checkedChecklistImage === true || response.capabilities.checkedImageOnDone === true);
+    if (explicit) return true;
+    const version = String((response && response.version) || "").trim();
+    return compareVersionStrings(version, "1.4.0") >= 0;
+  }
+
+  function compareVersionStrings(a, b) {
+    const pa = String(a || "0").split(".").map((v) => Number(v || 0));
+    const pb = String(b || "0").split(".").map((v) => Number(v || 0));
+    const len = Math.max(pa.length, pb.length);
+    for (let i = 0; i < len; i += 1) {
+      const av = Number(pa[i] || 0);
+      const bv = Number(pb[i] || 0);
+      if (av > bv) return 1;
+      if (av < bv) return -1;
+    }
+    return 0;
   }
 
   function setApiStatus(status, text) {
@@ -2239,6 +2279,7 @@ const imageInflightCache = new Map();
     delete cleaned.__syncAttempts;
     cleaned.__localOnly = false;
     cleaned.__localImageDataUrl = String(cleaned.__localImageDataUrl || "");
+    cleaned.__localCheckedImageDataUrl = String(cleaned.__localCheckedImageDataUrl || "");
 
     return cleaned;
   }
@@ -2608,19 +2649,31 @@ const imageInflightCache = new Map();
     return record;
   }
 
-  async function cacheLocalImageForNoteByFileId(note, imageDataUrl) {
-    const imageFileId = String(note && note.imageFileId || "").trim();
+  async function cacheLocalImageDataByFileId(meta, imageDataUrl) {
+    const imageFileId = String(meta && meta.imageFileId || "").trim();
     const dataUrl = String(imageDataUrl || "").trim();
     if (!imageFileId || !dataUrl) return null;
 
     return putImageCacheRecord(
       buildImageCacheRecord({
         imageFileId,
-        noteId: String(note.noteId || ""),
+        noteId: String(meta && meta.noteId || ""),
         dataUrl,
-        status: normalizeStatus(note.status || "PENDING") || "PENDING",
-        doneAt: String(note.checkedAt || ""),
+        status: normalizeStatus(meta && meta.status || "PENDING") || "PENDING",
+        doneAt: String(meta && meta.checkedAt || meta && meta.doneAt || ""),
       })
+    );
+  }
+
+  async function cacheLocalImageForNoteByFileId(note, imageDataUrl) {
+    return cacheLocalImageDataByFileId(
+      {
+        imageFileId: String(note && note.imageFileId || ""),
+        noteId: String(note && note.noteId || ""),
+        status: normalizeStatus(note && note.status || "PENDING") || "PENDING",
+        checkedAt: String(note && note.checkedAt || ""),
+      },
+      imageDataUrl
     );
   }
 
@@ -2631,6 +2684,17 @@ const imageInflightCache = new Map();
       noteId: String(note.noteId || ""),
       status,
       doneAt: status === "DONE" ? String(note.checkedAt || "") : "",
+    });
+  }
+
+  async function updateCachedImageStatusForFileId(imageFileId, note) {
+    const key = String(imageFileId || "").trim();
+    if (!key) return null;
+    const status = normalizeStatus(note && note.status || "PENDING") || "PENDING";
+    return touchImageCacheMeta(key, {
+      noteId: String(note && note.noteId || ""),
+      status,
+      doneAt: status === "DONE" ? String(note && note.checkedAt || "") : "",
     });
   }
 
@@ -2744,6 +2808,13 @@ const imageInflightCache = new Map();
             message: "",
           };
         }
+        if (liveNote.__localCheckedImageDataUrl) {
+          state.noteModal.checkedImage = {
+            status: "loaded",
+            dataUrl: liveNote.__localCheckedImageDataUrl,
+            message: "",
+          };
+        }
         renderNoteModal();
       }
     }
@@ -2818,6 +2889,13 @@ const imageInflightCache = new Map();
 
       note.status = "DONE";
       note.checkedAt = note.checkedAt || item.meta.checkedAt || new Date(item.createdAtMs).toISOString();
+      if (item.payload && item.payload.imageDataUrl) {
+        note.checkedImageMimeType = String(item.payload.imageMimeType || note.checkedImageMimeType || "image/jpeg");
+        note.checkedImageName = String(item.payload.imageName || note.checkedImageName || "");
+        note.__localCheckedImageDataUrl = String(item.payload.imageDataUrl || "");
+        note.hasCheckedImage = true;
+        note.isCheckedImageDeleted = false;
+      }
       markNoteWithSyncState(note, item, status);
       upsertNoteInList(done, note);
       return;
@@ -2848,8 +2926,16 @@ const imageInflightCache = new Map();
       imageDeletedAt: "",
       hasImage: Boolean(payload.imageDataUrl),
       isImageDeleted: false,
+      checkedImageFileId: "",
+      checkedImageUrl: "",
+      checkedImageMimeType: "",
+      checkedImageName: "",
+      checkedImageDeletedAt: "",
+      hasCheckedImage: false,
+      isCheckedImageDeleted: false,
       __localOnly: true,
       __localImageDataUrl: String(payload.imageDataUrl || ""),
+      __localCheckedImageDataUrl: "",
     };
   }
 
@@ -2872,8 +2958,16 @@ const imageInflightCache = new Map();
       imageDeletedAt: "",
       hasImage: Boolean(payload.imageDataUrl),
       isImageDeleted: false,
+      checkedImageFileId: "",
+      checkedImageUrl: "",
+      checkedImageMimeType: "",
+      checkedImageName: "",
+      checkedImageDeletedAt: "",
+      hasCheckedImage: false,
+      isCheckedImageDeleted: false,
       __localOnly: true,
       __localImageDataUrl: String(payload.imageDataUrl || ""),
+      __localCheckedImageDataUrl: "",
     };
   }
 
@@ -2896,6 +2990,7 @@ const imageInflightCache = new Map();
     delete note.__syncAttempts;
     delete note.__localOnly;
     delete note.__localImageDataUrl;
+    delete note.__localCheckedImageDataUrl;
     return note;
   }
 
@@ -3108,7 +3203,6 @@ const imageInflightCache = new Map();
       const data = payload.data && typeof payload.data === "object" ? payload.data : {};
       const beforeNote = noteId ? cloneNoteForUi(getLocalNoteById(noteId) || {}) : null;
       const oldImageFileId = String(beforeNote && beforeNote.imageFileId || "");
-      let autoMarkDoneQueued = false;
       const response = await apiPost("updateNote", payload);
       const rawItem = extractNoteDetail(response);
       let updatedNote = null;
@@ -3176,41 +3270,8 @@ const imageInflightCache = new Map();
         setLocalNoteCache(cachedNote, { skipRebuild: true });
         await cacheNoteMetaToIdb(cachedNote);
 
-        if (queueItem.meta && queueItem.meta.autoMarkDone === true) {
-          const checkedAt = String(queueItem.meta.checkedAt || new Date().toISOString());
-          enqueueSyncOperation({
-            type: "markDone",
-            payload: { noteId: updatedNote.noteId },
-            localNote: {
-              ...cloneNoteForUi(cachedNote),
-              status: "DONE",
-              checkedAt,
-            },
-            meta: { checkedAt },
-          });
-          autoMarkDoneQueued = true;
-        }
       } else if (oldImageFileId && data.removeImage === true && !data.imageDataUrl && !data.imageBase64) {
         await deleteImageCacheEverywhere(oldImageFileId);
-      }
-
-      if (queueItem.meta && queueItem.meta.autoMarkDone === true && !autoMarkDoneQueued) {
-        const fallbackNoteId = String(updatedNote && updatedNote.noteId || noteId || "");
-        if (fallbackNoteId) {
-          const checkedAt = String(queueItem.meta.checkedAt || new Date().toISOString());
-          const localSnapshot = cloneNoteForUi(getLocalNoteById(fallbackNoteId) || {});
-          enqueueSyncOperation({
-            type: "markDone",
-            payload: { noteId: fallbackNoteId },
-            localNote: {
-              ...localSnapshot,
-              noteId: fallbackNoteId,
-              status: "DONE",
-              checkedAt,
-            },
-            meta: { checkedAt },
-          });
-        }
       }
 
       rebuildVisibleNotesFromSources();
@@ -3234,6 +3295,19 @@ const imageInflightCache = new Map();
       if (note.noteId) {
         await cacheNoteMetaToIdb({ ...note, status: "DONE" });
         await updateCachedImageStatusForNote({ ...note, status: "DONE" });
+        if (note.checkedImageFileId && payload.imageDataUrl) {
+          await cacheLocalImageDataByFileId(
+            {
+              imageFileId: note.checkedImageFileId,
+              noteId: String(note.noteId || ""),
+              status: "DONE",
+              checkedAt: String(note.checkedAt || payload.checkedAt || ""),
+            },
+            String(payload.imageDataUrl || "")
+          );
+        } else if (note.checkedImageFileId) {
+          await updateCachedImageStatusForFileId(note.checkedImageFileId, { ...note, status: "DONE" });
+        }
       }
 
       rebuildVisibleNotesFromSources();
@@ -3397,6 +3471,10 @@ const imageInflightCache = new Map();
       if (!draft || state.noteModal.saving || draft.compressing) return;
     } else if (cameraTarget === "checklist") {
       if (!state.confirm.open || state.confirm.busy || state.confirm.compressing) return;
+      if (!state.apiMeta.supportsCheckedChecklistImage) {
+        showToast("warn", "ต้องอัปเดต backend ก่อน จึงจะแนบรูปตอนเช็กงานได้");
+        return;
+      }
     }
     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
       showToast("error", "เบราว์เซอร์นี้ไม่รองรับกล้อง กรุณาใช้ปุ่มเลือกรูป");
@@ -3824,7 +3902,11 @@ const imageInflightCache = new Map();
 
   function renderNoteCard(note, scope) {
     const isPending = scope === "pending";
-    const hasImage = (Boolean(note.imageFileId) && !note.imageDeleted) || Boolean(note.__localImageDataUrl);
+    const hasImage =
+      (Boolean(note.imageFileId) && !note.imageDeleted) ||
+      Boolean(note.__localImageDataUrl) ||
+      (Boolean(note.checkedImageFileId) && !note.checkedImageDeleted) ||
+      Boolean(note.__localCheckedImageDataUrl);
     const createdAt = formatDateTime(note.createdAt) || "-";
     const checkedAt = note.checkedAt ? formatDateTime(note.checkedAt) : "";
     const status = normalizeStatus(note.status || (isPending ? "PENDING" : "DONE"));
@@ -3965,6 +4047,7 @@ const imageInflightCache = new Map();
     state.noteModal.detail = null;
     state.noteModal.editDraft = null;
     state.noteModal.image = { status: "idle", dataUrl: "", message: "" };
+    state.noteModal.checkedImage = { status: "idle", dataUrl: "", message: "" };
 
     showModalElements(dom.noteModalBackdrop, dom.noteModalShell);
     dom.noteModalShell.setAttribute("aria-hidden", "false");
@@ -3975,11 +4058,18 @@ const imageInflightCache = new Map();
     await loadNoteDetail(noteId);
   }
 
-  async function tryHydrateNoteModalImageFromCache(note, token) {
-    if (!note || !note.imageFileId || note.imageDeleted) return;
+  async function tryHydrateNoteModalImageFromCache(note, token, kind = "primary") {
+    const isChecked = kind === "checked";
+    const fileId = String(isChecked ? note && note.checkedImageFileId : note && note.imageFileId || "").trim();
+    const deleted = Boolean(isChecked ? note && note.checkedImageDeleted : note && note.imageDeleted);
+    const localDataUrl = String(
+      (isChecked ? note && note.__localCheckedImageDataUrl : note && note.__localImageDataUrl) || ""
+    );
+    if (localDataUrl) return;
+    if (!note || !fileId || deleted) return;
 
     try {
-      const dataUrl = await getImageFast(note.imageFileId, note.noteId || "", {
+      const dataUrl = await getImageFast(fileId, note.noteId || "", {
         status: note.status || "PENDING",
         doneAt: note.checkedAt || "",
       });
@@ -3988,12 +4078,18 @@ const imageInflightCache = new Map();
       if (String(state.noteModal.noteId) !== String(note.noteId || "")) return;
 
       const currentDetail = state.noteModal.detail || {};
-      if (String(currentDetail.imageFileId || note.imageFileId) !== String(note.imageFileId)) return;
-      if (state.noteModal.image.status === "loaded" && state.noteModal.image.dataUrl === dataUrl) return;
+      const currentFileId = String(isChecked ? currentDetail.checkedImageFileId || fileId : currentDetail.imageFileId || fileId);
+      if (currentFileId !== fileId) return;
 
-      state.noteModal.image = { status: "loaded", dataUrl, message: "" };
-      if (state.noteModal.detail && !state.noteModal.detail.__localImageDataUrl) {
-        state.noteModal.detail = { ...state.noteModal.detail, __localImageDataUrl: dataUrl };
+      const targetStateKey = isChecked ? "checkedImage" : "image";
+      if (state.noteModal[targetStateKey].status === "loaded" && state.noteModal[targetStateKey].dataUrl === dataUrl) return;
+
+      state.noteModal[targetStateKey] = { status: "loaded", dataUrl, message: "" };
+      if (state.noteModal.detail) {
+        const targetLocalKey = isChecked ? "__localCheckedImageDataUrl" : "__localImageDataUrl";
+        if (!state.noteModal.detail[targetLocalKey]) {
+          state.noteModal.detail = { ...state.noteModal.detail, [targetLocalKey]: dataUrl };
+        }
       }
       renderNoteModal();
     } catch (error) {
@@ -4010,6 +4106,7 @@ const imageInflightCache = new Map();
     state.noteModal.saving = false;
     state.noteModal.mode = "view";
     state.noteModal.editDraft = null;
+    state.noteModal.checkedImage = { status: "idle", dataUrl: "", message: "" };
 
     hideModalElements(dom.noteModalBackdrop, dom.noteModalShell);
     dom.noteModalShell.setAttribute("aria-hidden", "true");
@@ -4021,6 +4118,7 @@ const imageInflightCache = new Map();
     const token = ++state.noteModal.requestToken;
     const localNote = getLocalNoteById(noteId);
     const localHasImageRecord = Boolean(localNote && localNote.imageFileId && !localNote.imageDeleted);
+    const localHasCheckedImageRecord = Boolean(localNote && localNote.checkedImageFileId && !localNote.checkedImageDeleted);
     state.noteModal.loading = true;
     state.noteModal.error = "";
     state.noteModal.detail = localNote || null;
@@ -4035,9 +4133,23 @@ const imageInflightCache = new Map();
     } else {
       state.noteModal.image = { status: localNote ? "none" : "idle", dataUrl: "", message: "" };
     }
+    if (localNote && localNote.__localCheckedImageDataUrl) {
+      state.noteModal.checkedImage = {
+        status: "loaded",
+        dataUrl: localNote.__localCheckedImageDataUrl,
+        message: "",
+      };
+    } else if (localHasCheckedImageRecord) {
+      state.noteModal.checkedImage = { status: "loading", dataUrl: "", message: "" };
+    } else {
+      state.noteModal.checkedImage = { status: localNote ? "none" : "idle", dataUrl: "", message: "" };
+    }
     renderNoteModal();
     if (localHasImageRecord && localNote) {
-      void tryHydrateNoteModalImageFromCache(localNote, token);
+      void tryHydrateNoteModalImageFromCache(localNote, token, "primary");
+    }
+    if (localHasCheckedImageRecord && localNote) {
+      void tryHydrateNoteModalImageFromCache(localNote, token, "checked");
     }
 
     if (localNote && localNote.__localOnly) {
@@ -4050,6 +4162,15 @@ const imageInflightCache = new Map();
         };
       } else {
         state.noteModal.image = { status: "none", dataUrl: "", message: "" };
+      }
+      if (localNote.__localCheckedImageDataUrl) {
+        state.noteModal.checkedImage = {
+          status: "loaded",
+          dataUrl: localNote.__localCheckedImageDataUrl,
+          message: "",
+        };
+      } else {
+        state.noteModal.checkedImage = { status: "none", dataUrl: "", message: "" };
       }
       renderNoteModal();
       return;
@@ -4087,6 +4208,42 @@ const imageInflightCache = new Map();
         state.noteModal.image = { status: "none", dataUrl: "", message: "" };
       }
 
+      if (state.noteModal.detail.__localCheckedImageDataUrl) {
+        state.noteModal.checkedImage = {
+          status: "loaded",
+          dataUrl: state.noteModal.detail.__localCheckedImageDataUrl,
+          message: "",
+        };
+        if (detail.checkedImageFileId) {
+          void cacheLocalImageDataByFileId(
+            {
+              imageFileId: detail.checkedImageFileId,
+              noteId: detail.noteId,
+              status: detail.status || "DONE",
+              checkedAt: detail.checkedAt || "",
+            },
+            state.noteModal.detail.__localCheckedImageDataUrl
+          );
+        }
+      } else if (detail.checkedImageDataUrl) {
+        state.noteModal.checkedImage = { status: "loaded", dataUrl: detail.checkedImageDataUrl, message: "" };
+        if (detail.checkedImageFileId) {
+          void cacheLocalImageDataByFileId(
+            {
+              imageFileId: detail.checkedImageFileId,
+              noteId: detail.noteId,
+              status: detail.status || "DONE",
+              checkedAt: detail.checkedAt || "",
+            },
+            detail.checkedImageDataUrl
+          );
+        }
+      } else if (detail.checkedImageFileId && !detail.checkedImageDeleted) {
+        state.noteModal.checkedImage = { status: "loading", dataUrl: "", message: "" };
+      } else {
+        state.noteModal.checkedImage = { status: "none", dataUrl: "", message: "" };
+      }
+
       renderNoteModal();
 
       if (
@@ -4095,7 +4252,15 @@ const imageInflightCache = new Map();
         !detail.imageDataUrl &&
         !state.noteModal.detail.__localImageDataUrl
       ) {
-        await loadNoteImageData(detail.imageFileId, token);
+        await loadNoteImageData(detail.imageFileId, token, "primary");
+      }
+      if (
+        detail.checkedImageFileId &&
+        !detail.checkedImageDeleted &&
+        !detail.checkedImageDataUrl &&
+        !state.noteModal.detail.__localCheckedImageDataUrl
+      ) {
+        await loadNoteImageData(detail.checkedImageFileId, token, "checked");
       }
     } catch (error) {
       if (token !== state.noteModal.requestToken || !state.noteModal.open) return;
@@ -4103,12 +4268,13 @@ const imageInflightCache = new Map();
       state.noteModal.error = getErrorMessage(error);
       if (!state.noteModal.detail) {
         state.noteModal.image = { status: "none", dataUrl: "", message: "" };
+        state.noteModal.checkedImage = { status: "none", dataUrl: "", message: "" };
       }
       renderNoteModal();
     }
   }
 
-  async function loadNoteImageData(fileId, token) {
+  async function loadNoteImageData(fileId, token, kind = "primary") {
     try {
       const detail = state.noteModal.detail || {};
       const dataUrl = await getImageFast(fileId, detail.noteId || "", {
@@ -4120,14 +4286,15 @@ const imageInflightCache = new Map();
         throw new Error("ไม่พบข้อมูลรูปภาพ");
       }
       if (state.noteModal.detail) {
-        state.noteModal.detail = { ...state.noteModal.detail, __localImageDataUrl: dataUrl };
+        const targetLocalKey = kind === "checked" ? "__localCheckedImageDataUrl" : "__localImageDataUrl";
+        state.noteModal.detail = { ...state.noteModal.detail, [targetLocalKey]: dataUrl };
       }
-      state.noteModal.image = { status: "loaded", dataUrl, message: "" };
+      state.noteModal[kind === "checked" ? "checkedImage" : "image"] = { status: "loaded", dataUrl, message: "" };
       renderNoteModal();
     } catch (error) {
       if (token !== state.noteModal.requestToken || !state.noteModal.open) return;
       const message = buildImageLoadPlaceholderMessage(error);
-      state.noteModal.image = { status: "missing", dataUrl: "", message };
+      state.noteModal[kind === "checked" ? "checkedImage" : "image"] = { status: "missing", dataUrl: "", message };
       renderNoteModal();
     }
   }
@@ -4194,7 +4361,7 @@ const imageInflightCache = new Map();
     const createdAtCompact = formatDateTimeCompact(detail.createdAt) || "-";
     const checkedAt = detail.checkedAt ? formatDateTime(detail.checkedAt) : "-";
     const syncMetaText = buildNoteSyncMetaText(detail);
-    const imageBlock = renderDetailImageView();
+    const imageBlock = renderDetailImagesView();
     const shortNoteId = shortenNoteId(detail.noteId || "-");
     const auditInfoHtml = renderDetailAuditInfo(detail);
 
@@ -4300,19 +4467,42 @@ const imageInflightCache = new Map();
     `;
   }
 
-  function renderDetailImageView() {
+  function renderDetailImagesView() {
     const detail = state.noteModal.detail || {};
-    const imageState = state.noteModal.image;
-    const hasImageRecord = Boolean(detail.imageFileId) && !detail.imageDeleted;
-    const localPreview = String(detail.__localImageDataUrl || "");
+    const blocks = [
+      renderDetailImageSection({
+        title: "รูปตอนสร้าง NOTE",
+        fileId: detail.imageFileId,
+        deleted: detail.imageDeleted,
+        localPreview: detail.__localImageDataUrl,
+        imageState: state.noteModal.image,
+        metaLabel: "imageFileId",
+      }),
+      renderDetailImageSection({
+        title: "รูปตอนเช็กงาน",
+        fileId: detail.checkedImageFileId,
+        deleted: detail.checkedImageDeleted,
+        localPreview: detail.__localCheckedImageDataUrl,
+        imageState: state.noteModal.checkedImage,
+        metaLabel: "checkedImageFileId",
+      }),
+    ].filter(Boolean);
+
+    return blocks.join("");
+  }
+
+  function renderDetailImageSection({ title, fileId, deleted, localPreview, imageState, metaLabel }) {
+    const hasImageRecord = Boolean(fileId) && !deleted;
+    const safeTitle = escapeHtml(String(title || "รูปภาพ"));
+    const safeMetaLabel = escapeHtml(String(metaLabel || "fileId"));
 
     if (localPreview) {
       return `
         <div class="detail-image">
+          <div class="detail-image__meta"><strong>${safeTitle}</strong> • แสดงตัวอย่างรูปจากเครื่อง (รอ sync)</div>
           <div class="detail-image__frame">
-            <img src="${escapeAttribute(localPreview)}" alt="รูปภาพประกอบ NOTE (local preview)">
+            <img src="${escapeAttribute(localPreview)}" alt="${escapeAttribute(title || "รูปภาพ")}">
           </div>
-          <div class="detail-image__meta">แสดงตัวอย่างรูปจากเครื่อง (รอ sync)</div>
         </div>
       `;
     }
@@ -4320,10 +4510,10 @@ const imageInflightCache = new Map();
     if (imageState.status === "loaded") {
       return `
         <div class="detail-image">
+          <div class="detail-image__meta"><strong>${safeTitle}</strong> • ${safeMetaLabel}: ${escapeHtml(fileId || "-")}</div>
           <div class="detail-image__frame">
-            <img src="${escapeAttribute(imageState.dataUrl)}" alt="รูปภาพประกอบ NOTE">
+            <img src="${escapeAttribute(imageState.dataUrl)}" alt="${escapeAttribute(title || "รูปภาพ")}">
           </div>
-          <div class="detail-image__meta">imageFileId: ${escapeHtml(detail.imageFileId || "-")}</div>
         </div>
       `;
     }
@@ -4331,24 +4521,24 @@ const imageInflightCache = new Map();
     if (hasImageRecord && (imageState.status === "loading" || imageState.status === "idle")) {
       return `
         <div class="detail-image">
+          <div class="detail-image__meta"><strong>${safeTitle}</strong> • ${safeMetaLabel}: ${escapeHtml(fileId || "-")}</div>
           <div class="detail-image__frame">
             <div class="inline-spinner"><span class="spinner" aria-hidden="true"></span>กำลังโหลดรูปภาพ...</div>
           </div>
-          <div class="detail-image__meta">imageFileId: ${escapeHtml(detail.imageFileId || "-")}</div>
         </div>
       `;
     }
 
-    if (imageState.status === "missing") {
+    if (hasImageRecord && imageState.status === "missing") {
       return `
         <div class="detail-image">
+          <div class="detail-image__meta"><strong>${safeTitle}</strong> • ${safeMetaLabel}: ${escapeHtml(fileId || "-")}</div>
           <div class="detail-image__frame">
             <div class="detail-image__placeholder">
               <strong>ไม่สามารถแสดงรูปได้</strong>
               ${escapeHtml(imageState.message || "รูปอาจถูกลบหรือหมดอายุ")}
             </div>
           </div>
-          <div class="detail-image__meta">imageFileId: ${escapeHtml(detail.imageFileId || "-")}</div>
         </div>
       `;
     }
@@ -4918,11 +5108,19 @@ const imageInflightCache = new Map();
     const file = event.target.files && event.target.files[0];
     if (!file) return;
     event.target.value = "";
+    if (!state.apiMeta.supportsCheckedChecklistImage) {
+      showToast("warn", "ต้องอัปเดต backend ก่อน จึงจะแนบรูปตอนเช็กงานได้");
+      return;
+    }
     await processConfirmImageFile(file);
   }
 
   async function processConfirmImageFile(file) {
     if (!file || !state.confirm.open) return;
+    if (!state.apiMeta.supportsCheckedChecklistImage) {
+      showToast("warn", "ต้องอัปเดต backend ก่อน จึงจะแนบรูปตอนเช็กงานได้");
+      return;
+    }
     if (!file.type.startsWith("image/")) {
       showToast("error", "กรุณาเลือกไฟล์รูปภาพเท่านั้น");
       return;
@@ -4961,6 +5159,7 @@ const imageInflightCache = new Map();
   function renderConfirmImagePreview() {
     if (!dom.confirmImagePreviewCard || !dom.confirmImagePreview || !dom.confirmImagePlaceholder || !dom.confirmImageMeta) return;
     const image = state.confirm.image;
+    const supportsCheckedImage = Boolean(state.apiMeta.supportsCheckedChecklistImage);
 
     if (state.confirm.compressing) {
       dom.confirmImagePreviewCard.dataset.empty = "true";
@@ -4979,7 +5178,9 @@ const imageInflightCache = new Map();
       dom.confirmImagePreview.hidden = true;
       dom.confirmImagePreview.removeAttribute("src");
       dom.confirmImagePlaceholder.hidden = false;
-      dom.confirmImageMeta.textContent = "แนบรูปเพื่อเป็นหลักฐานการเช็กงาน (ไม่บังคับ)";
+      dom.confirmImageMeta.textContent = supportsCheckedImage
+        ? "แนบรูปเพื่อเป็นหลักฐานการเช็กงาน (ไม่บังคับ)"
+        : "ต้องอัปเดต backend เป็นเวอร์ชันที่รองรับ checkedImage แยกก่อน จึงจะแนบรูปตอนเช็กงานได้";
       return;
     }
 
@@ -5448,12 +5649,18 @@ const imageInflightCache = new Map();
 
   function renderConfirmModalState() {
     const busy = Boolean(state.confirm.busy || state.confirm.compressing);
+    const supportsCheckedImage = Boolean(state.apiMeta.supportsCheckedChecklistImage);
     dom.btnConfirmCancel.disabled = busy;
     dom.btnConfirmSubmit.disabled = busy;
     dom.btnConfirmSubmit.textContent = state.confirm.busy ? "กำลังยืนยัน..." : "ยืนยัน";
-    if (dom.btnConfirmOpenCamera) dom.btnConfirmOpenCamera.disabled = busy;
-    if (dom.btnConfirmPickImage) dom.btnConfirmPickImage.disabled = busy;
-    if (dom.btnConfirmRemoveImage) dom.btnConfirmRemoveImage.disabled = busy || !state.confirm.image;
+    if (dom.btnConfirmOpenCamera) dom.btnConfirmOpenCamera.disabled = busy || !supportsCheckedImage;
+    if (dom.btnConfirmPickImage) dom.btnConfirmPickImage.disabled = busy || !supportsCheckedImage;
+    if (dom.btnConfirmRemoveImage) dom.btnConfirmRemoveImage.disabled = busy || !supportsCheckedImage || !state.confirm.image;
+    if (dom.confirmImageMeta && !state.confirm.compressing) {
+      dom.confirmImageMeta.textContent = supportsCheckedImage
+        ? (state.confirm.image ? buildCompressionStatsText(state.confirm.image.stats) : "แนบรูปเพื่อเป็นหลักฐานการเช็กงาน (ไม่บังคับ)")
+        : "ต้องอัปเดต backend เป็นเวอร์ชันที่รองรับ checkedImage แยกก่อน จึงจะแนบรูปตอนเช็กงานได้";
+    }
     renderConfirmImagePreview();
   }
 
@@ -5472,63 +5679,54 @@ const imageInflightCache = new Map();
         throw new Error("รายการนี้ยังซิงก์ไม่เสร็จ กรุณารอให้บันทึกขึ้นระบบก่อน");
       }
 
-      removeLocalNoteCache(noteId, { skipRebuild: true });
       const checkedAt = new Date().toISOString();
+      if (state.confirm.image && !state.apiMeta.supportsCheckedChecklistImage) {
+        throw new Error("backend ยังไม่รองรับการเก็บรูปตอนเช็กงานแยกจากรูปตอนสร้าง");
+      }
       const checklistImage = state.confirm.image ? { ...state.confirm.image } : null;
+      removeLocalNoteCache(noteId, { skipRebuild: true });
 
-      const noteSnapshotWithChecklistImage = noteSnapshot
+      const doneLocalNote = noteSnapshot
         ? {
             ...cloneNoteForUi(noteSnapshot),
+            status: "DONE",
+            checkedAt,
             ...(checklistImage
               ? {
-                  hasImage: true,
-                  imageMimeType: checklistImage.imageMimeType,
-                  imageName: checklistImage.imageName,
-                  __localImageDataUrl: checklistImage.dataUrl,
+                  checkedImageMimeType: checklistImage.imageMimeType,
+                  checkedImageName: checklistImage.imageName,
+                  __localCheckedImageDataUrl: checklistImage.dataUrl,
+                  hasCheckedImage: true,
+                  isCheckedImageDeleted: false,
                 }
               : {}),
           }
         : null;
 
-      if (checklistImage) {
-        enqueueSyncOperation({
-          type: "update",
-          payload: {
-            noteId,
-            data: {
-              imageDataUrl: checklistImage.dataUrl,
-              imageName: checklistImage.imageName,
-              imageMimeType: checklistImage.imageMimeType,
-            },
-          },
-          localNote: noteSnapshotWithChecklistImage,
-          meta: {
-            autoMarkDone: true,
-            checkedAt,
-          },
-        });
-      } else {
-        enqueueSyncOperation({
-          type: "markDone",
-          payload: { noteId },
-          localNote: noteSnapshot ? cloneNoteForUi(noteSnapshot) : null,
-          meta: {
-            checkedAt,
-          },
-        });
-      }
+      enqueueSyncOperation({
+        type: "markDone",
+        payload: {
+          noteId,
+          ...(checklistImage
+            ? {
+                imageDataUrl: checklistImage.dataUrl,
+                imageName: checklistImage.imageName,
+                imageMimeType: checklistImage.imageMimeType,
+              }
+            : {}),
+        },
+        localNote: doneLocalNote,
+        meta: {
+          checkedAt,
+        },
+      });
 
       if (state.noteModal.open && String(state.noteModal.noteId) === String(noteId)) {
         closeNoteModal();
       }
 
       closeConfirmModal();
-      showToast(
-        "success",
-        checklistImage
-          ? "บันทึกรูปในเครื่องแล้ว กำลังส่งอัปเดตรูปและสถานะ..."
-          : "ย้ายในเครื่องแล้ว กำลังส่งอัปเดตสถานะ..."
-      );
+      showToast("success", checklistImage ? "บันทึกรูปในเครื่องแล้ว กำลังส่งสถานะ..." : "ย้ายในเครื่องแล้ว กำลังส่งอัปเดตสถานะ...");
       void processSyncQueue({ reason: "mark-done-submit" });
     } catch (error) {
       state.confirm.busy = false;
@@ -5838,6 +6036,49 @@ const imageInflightCache = new Map();
       imageName: String(coalesce(source.imageName, source.image && source.image.name, "") || ""),
       imageMimeType: String(coalesce(source.imageMimeType, source.image && source.image.mimeType, "") || ""),
       imageDataUrl: String(coalesce(source.imageDataUrl, source.image && source.image.dataUrl, "") || ""),
+      checkedImageFileId: String(
+        coalesce(
+          source.checkedImageFileId,
+          source.checked_image_file_id,
+          source.checkedImage && source.checkedImage.fileId,
+          ""
+        ) || ""
+      ),
+      checkedImageUrl: String(
+        coalesce(source.checkedImageUrl, source.checked_image_url, source.checkedImage && source.checkedImage.url, "") || ""
+      ),
+      checkedImageDeleted: Boolean(
+        coalesce(
+          source.checkedImageDeleted,
+          source.isCheckedImageDeleted,
+          source.checkedImageDeletedAt,
+          source.checked_image_deleted,
+          source.checkedImage && source.checkedImage.deleted,
+          false
+        )
+      ),
+      checkedImageName: String(
+        coalesce(source.checkedImageName, source.checked_image_name, source.checkedImage && source.checkedImage.name, "") || ""
+      ),
+      checkedImageMimeType: String(
+        coalesce(
+          source.checkedImageMimeType,
+          source.checked_image_mime_type,
+          source.checkedImage && source.checkedImage.mimeType,
+          ""
+        ) || ""
+      ),
+      checkedImageDataUrl: String(
+        coalesce(
+          source.checkedImageDataUrl,
+          source.checkedImage && source.checkedImage.dataUrl,
+          source.checked_image_data_url,
+          ""
+        ) || ""
+      ),
+      checkedImageDeletedAt: String(
+        coalesce(source.checkedImageDeletedAt, source.checked_image_deleted_at, "") || ""
+      ),
       raw: source,
     };
 
