@@ -144,6 +144,7 @@
     <div class="side-menu-panel__body">
       <div class="side-menu-panel__actions">
         <button type="button" class="btn btn--outline btn--menu-item hidden" id="btn-open-dashboard">Dashboard</button>
+        <button type="button" class="btn btn--outline btn--menu-item hidden" id="btn-open-sync-queue">คิวค้างส่ง</button>
         <button type="button" class="btn btn--outline btn--menu-item hidden" id="btn-open-user-mgmt">จัดการผู้ใช้</button>
       </div>
 
@@ -754,8 +755,36 @@
     </section>
   </div>
 
+  <div id="sync-queue-backdrop" class="overlay hidden" aria-hidden="true"></div>
+  <div id="sync-queue-shell" class="modal-shell hidden" aria-hidden="true">
+    <section class="modal-card modal-card--lg" role="dialog" aria-modal="true" aria-labelledby="sync-queue-heading">
+      <div class="modal-card__header">
+        <div>
+          <h2 id="sync-queue-heading">คิวค้างส่ง</h2>
+          <p>รายการ NOTE ที่ยังส่งขึ้นระบบไม่สำเร็จจากเครื่องนี้</p>
+        </div>
+        <div class="modal-card__header-actions">
+          <span class="badge badge--subtle" id="sync-queue-count">0 รายการ</span>
+          <button type="button" class="icon-btn" id="btn-close-sync-queue" aria-label="ปิดหน้าต่างคิวค้างส่ง">
+            <span aria-hidden="true">&times;</span>
+          </button>
+        </div>
+      </div>
+      <div class="modal-card__body">
+        <p class="field__hint sync-queue-hint">คุณสามารถกดส่งใหม่ หรือเปิดดูรายการค้างส่งแล้วลบออกจากเครื่องได้</p>
+        <div class="list-wrap list-wrap--sidebar">
+          <ul id="sync-queue-list" class="note-list sync-queue-list" aria-live="polite"></ul>
+        </div>
+      </div>
+      <div class="modal-card__footer">
+        <button type="button" class="btn btn--ghost" id="btn-sync-queue-close">ปิด</button>
+        <button type="button" class="btn btn--primary" id="btn-sync-queue-retry-all">ส่งคิวอีกครั้งทั้งหมด</button>
+      </div>
+    </section>
+  </div>
+
   <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
 
-  <script src="assets/app.js?v=20260301a"></script>
+  <script src="assets/app.js?v=20260301b"></script>
 </body>
 </html>

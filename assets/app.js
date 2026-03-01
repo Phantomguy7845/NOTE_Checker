@@ -155,6 +155,9 @@ const imageInflightCache = new Map();
       processing: false,
       timerId: null,
     },
+    syncQueueModal: {
+      open: false,
+    },
     // === AUTH PATCH START ===
     auth: {
       token: "",
@@ -234,6 +237,14 @@ const imageInflightCache = new Map();
     dom.syncStatusText = document.getElementById("sync-status-text");
     dom.btnRefreshAll = document.getElementById("btn-refresh-all");
     dom.btnRetrySync = document.getElementById("btn-retry-sync");
+    dom.syncQueueBackdrop = document.getElementById("sync-queue-backdrop");
+    dom.syncQueueShell = document.getElementById("sync-queue-shell");
+    dom.syncQueueCount = document.getElementById("sync-queue-count");
+    dom.syncQueueList = document.getElementById("sync-queue-list");
+    dom.btnOpenSyncQueue = document.getElementById("btn-open-sync-queue");
+    dom.btnCloseSyncQueue = document.getElementById("btn-close-sync-queue");
+    dom.btnSyncQueueClose = document.getElementById("btn-sync-queue-close");
+    dom.btnSyncQueueRetryAll = document.getElementById("btn-sync-queue-retry-all");
     dom.sideMenuBackdrop = document.getElementById("side-menu-backdrop");
     dom.sideMenuPanel = document.getElementById("side-menu-panel");
     dom.btnOpenSideMenu = document.getElementById("btn-open-side-menu");
@@ -416,6 +427,23 @@ const imageInflightCache = new Map();
     dom.btnRetrySync.addEventListener("click", () => {
       void processSyncQueue({ manual: true, reason: "manual-retry" });
     });
+    if (dom.btnOpenSyncQueue) {
+      dom.btnOpenSyncQueue.addEventListener("click", () => {
+        closeSideMenu();
+        openSyncQueueModal();
+      });
+    }
+    if (dom.syncQueueBackdrop) dom.syncQueueBackdrop.addEventListener("click", closeSyncQueueModal);
+    if (dom.btnCloseSyncQueue) dom.btnCloseSyncQueue.addEventListener("click", closeSyncQueueModal);
+    if (dom.btnSyncQueueClose) dom.btnSyncQueueClose.addEventListener("click", closeSyncQueueModal);
+    if (dom.btnSyncQueueRetryAll) {
+      dom.btnSyncQueueRetryAll.addEventListener("click", () => {
+        void processSyncQueue({ manual: true, reason: "sync-queue-retry-all" });
+      });
+    }
+    if (dom.syncQueueList) {
+      dom.syncQueueList.addEventListener("click", handleSyncQueueListClick);
+    }
     if (dom.btnOpenSideMenu) {
       dom.btnOpenSideMenu.addEventListener("click", openSideMenu);
     }
@@ -1287,6 +1315,9 @@ const imageInflightCache = new Map();
     }
     if (state.dashboard.open) {
       closeDashboardModal();
+    }
+    if (state.syncQueueModal.open) {
+      closeSyncQueueModal();
     }
 
     if (!options.silent && source === "manual") {
@@ -3019,6 +3050,220 @@ const imageInflightCache = new Map();
     return removed || null;
   }
 
+  function getSyncQueueItemById(queueId) {
+    const key = String(queueId || "").trim();
+    if (!key) return null;
+    return state.sync.queue.find((item) => String(item.id || "") === key) || null;
+  }
+
+  function getSyncQueueItemNoteId(queueItem) {
+    if (!queueItem) return "";
+    return String(
+      (queueItem.payload && queueItem.payload.noteId) ||
+      (queueItem.localNote && queueItem.localNote.noteId) ||
+      (queueItem.meta && queueItem.meta.localNoteId) ||
+      ""
+    ).trim();
+  }
+
+  function getSyncQueueItemTitle(queueItem) {
+    if (!queueItem) return "NOTE ที่ค้างส่ง";
+    return String(
+      (queueItem.localNote && queueItem.localNote.title) ||
+      (queueItem.payload && queueItem.payload.title) ||
+      (queueItem.payload && queueItem.payload.data && queueItem.payload.data.title) ||
+      "NOTE ที่ค้างส่ง"
+    ).trim();
+  }
+
+  function getSyncQueueItemTypeLabel(queueItem) {
+    const type = String((queueItem && queueItem.type) || "").trim().toLowerCase();
+    if (type === "create") return "สร้าง NOTE";
+    if (type === "update") return "อัปเดต NOTE";
+    if (type === "markdone") return "Checklist เสร็จแล้ว";
+    return "Sync NOTE";
+  }
+
+  function getSyncQueueItemStatusChip(queueItem) {
+    const status = String((queueItem && queueItem.status) || "pending").trim().toLowerCase();
+    if (status === "failed") {
+      return { label: "FAILED", className: "chip--warn" };
+    }
+    if (status === "syncing") {
+      return { label: "SYNCING", className: "chip--syncing" };
+    }
+    return { label: "PENDING", className: "chip--pending" };
+  }
+
+  function buildSyncQueueItemMetaLines(queueItem) {
+    const lines = [];
+    lines.push(`งาน: ${getSyncQueueItemTypeLabel(queueItem)}`);
+    lines.push(`เก็บเข้าคิว: ${formatDateTime(queueItem && queueItem.createdAtMs) || "-"}`);
+
+    const noteId = getSyncQueueItemNoteId(queueItem);
+    if (noteId) {
+      lines.push(`noteId: ${noteId}`);
+    }
+
+    const attempts = Number((queueItem && queueItem.attempts) || 0);
+    if (attempts > 0) {
+      lines.push(`พยายามส่งแล้ว: ${attempts} ครั้ง`);
+    }
+
+    const nextRetryAtMs = Number((queueItem && queueItem.nextRetryAtMs) || 0);
+    if (nextRetryAtMs > Date.now()) {
+      lines.push(`จะลองใหม่: ${formatDateTime(nextRetryAtMs) || "-"}`);
+    }
+
+    return lines;
+  }
+
+  function renderSyncQueueItem(queueItem) {
+    const chip = getSyncQueueItemStatusChip(queueItem);
+    const noteTitle = escapeHtml(getSyncQueueItemTitle(queueItem));
+    const metaLines = buildSyncQueueItemMetaLines(queueItem)
+      .map((line) => `<span>${escapeHtml(line)}</span>`)
+      .join("");
+    const isSyncing = String((queueItem && queueItem.status) || "") === "syncing";
+    const errorText = String((queueItem && queueItem.error) || "").trim();
+
+    return `
+      <li class="note-card sync-queue-card">
+        <div class="sync-queue-card__header">
+          <div>
+            <h3 class="sync-queue-card__title">${noteTitle || "(ไม่มีหัวข้อ)"}</h3>
+          </div>
+          <span class="chip ${chip.className}">${escapeHtml(chip.label)}</span>
+        </div>
+        <div class="sync-queue-card__meta">
+          ${metaLines}
+        </div>
+        ${errorText ? `<p class="sync-queue-card__error">${escapeHtml(errorText)}</p>` : ""}
+        <div class="sync-queue-card__actions">
+          <button type="button" class="btn btn--outline btn--sm" data-action="retry-sync-item" data-queue-id="${escapeAttribute(queueItem.id)}" ${isSyncing ? "disabled" : ""}>ส่งใหม่</button>
+          <button type="button" class="btn btn--danger-soft btn--sm" data-action="delete-sync-item" data-queue-id="${escapeAttribute(queueItem.id)}" ${isSyncing ? "disabled" : ""}>ลบออกจากเครื่อง</button>
+        </div>
+      </li>
+    `;
+  }
+
+  function renderSyncQueueModalState() {
+    if (!dom.syncQueueList || !dom.syncQueueCount) return;
+
+    const total = state.sync.queue.length;
+    dom.syncQueueCount.textContent = `${total} รายการ`;
+
+    if (dom.btnSyncQueueRetryAll) {
+      dom.btnSyncQueueRetryAll.disabled = !total || state.sync.processing;
+    }
+
+    if (!total) {
+      dom.syncQueueList.innerHTML = '<li class="list-message">ไม่มีรายการค้างส่งในเครื่อง</li>';
+      return;
+    }
+
+    const items = state.sync.queue
+      .slice()
+      .sort((a, b) => (a.createdAtMs || 0) - (b.createdAtMs || 0));
+    dom.syncQueueList.innerHTML = items.map((item) => renderSyncQueueItem(item)).join("");
+  }
+
+  function openSyncQueueModal() {
+    if (!dom.syncQueueShell || !dom.syncQueueBackdrop) return;
+    if (!authIsLoggedIn()) {
+      showToast("warn", "กรุณาเข้าสู่ระบบก่อน");
+      return;
+    }
+    if (state.syncQueueModal.open) return;
+
+    state.syncQueueModal.open = true;
+    renderSyncQueueModalState();
+    showModalElements(dom.syncQueueBackdrop, dom.syncQueueShell);
+    dom.syncQueueShell.setAttribute("aria-hidden", "false");
+    dom.syncQueueBackdrop.setAttribute("aria-hidden", "false");
+    syncBodyScrollLock();
+  }
+
+  function closeSyncQueueModal() {
+    if (!state.syncQueueModal.open) return;
+    state.syncQueueModal.open = false;
+    const fallbackFocusEl =
+      (dom.btnRetrySync && !dom.btnRetrySync.classList.contains("hidden") ? dom.btnRetrySync : null) ||
+      dom.btnOpenSideMenu ||
+      null;
+    releaseFocusBeforeHide(dom.syncQueueShell, fallbackFocusEl);
+    hideModalElements(dom.syncQueueBackdrop, dom.syncQueueShell);
+    dom.syncQueueShell.setAttribute("aria-hidden", "true");
+    dom.syncQueueBackdrop.setAttribute("aria-hidden", "true");
+    syncBodyScrollLock();
+  }
+
+  function syncDeleteQueueItem(queueId) {
+    const item = getSyncQueueItemById(queueId);
+    if (!item) return;
+    if (String(item.status || "") === "syncing") {
+      showToast("warn", "รายการนี้กำลังส่งอยู่ กรุณารอสักครู่");
+      return;
+    }
+
+    const noteId = getSyncQueueItemNoteId(item);
+    if (item.type === "create" && noteId) {
+      removeLocalNoteCache(noteId, { skipRebuild: true });
+      if (state.noteModal.open && String(state.noteModal.noteId) === String(noteId)) {
+        closeNoteModal();
+      }
+    }
+
+    removeSyncQueueItem(queueId);
+    renderSyncQueueModalState();
+    scheduleSyncRetry();
+
+    if (noteId && state.noteModal.open && String(state.noteModal.noteId) === String(noteId)) {
+      void loadNoteDetail(noteId);
+    }
+
+    showToast("success", "ลบรายการออกจากคิวในเครื่องแล้ว");
+  }
+
+  function syncRetryQueueItem(queueId) {
+    const item = getSyncQueueItemById(queueId);
+    if (!item) return;
+    if (String(item.status || "") === "syncing") {
+      showToast("warn", "รายการนี้กำลังส่งอยู่ กรุณารอสักครู่");
+      return;
+    }
+
+    updateSyncQueueItem(queueId, {
+      status: "pending",
+      error: "",
+      nextRetryAtMs: 0,
+    });
+    renderSyncQueueModalState();
+    scheduleSyncRetry();
+    void processSyncQueue({
+      manual: true,
+      reason: "manual-retry-item",
+      includeIds: new Set([String(queueId)]),
+    });
+  }
+
+  function handleSyncQueueListClick(event) {
+    const actionButton = event.target.closest("button[data-action][data-queue-id]");
+    if (!actionButton) return;
+
+    const queueId = String(actionButton.dataset.queueId || "").trim();
+    if (!queueId) return;
+
+    const action = String(actionButton.dataset.action || "");
+    if (action === "retry-sync-item") {
+      syncRetryQueueItem(queueId);
+      return;
+    }
+    if (action === "delete-sync-item") {
+      syncDeleteQueueItem(queueId);
+    }
+  }
+
   function renderSyncHeader() {
     if (!dom.syncStatus || !dom.syncStatusText || !dom.btnRetrySync) return;
 
@@ -3047,11 +3292,23 @@ const imageInflightCache = new Map();
       dom.btnRetrySync.classList.remove("hidden");
       dom.btnRetrySync.textContent = failed > 0 ? `ส่งคิวอีกครั้ง (${failed})` : `Sync คิว (${total})`;
       dom.btnRetrySync.disabled = state.sync.processing;
+      if (dom.btnOpenSyncQueue) {
+        dom.btnOpenSyncQueue.classList.remove("hidden");
+        dom.btnOpenSyncQueue.textContent = `คิวค้างส่ง (${total})`;
+        dom.btnOpenSyncQueue.disabled = false;
+      }
     } else {
       dom.btnRetrySync.classList.add("hidden");
       dom.btnRetrySync.disabled = false;
       dom.btnRetrySync.textContent = "ส่งคิวอีกครั้ง";
+      if (dom.btnOpenSyncQueue) {
+        dom.btnOpenSyncQueue.classList.add("hidden");
+        dom.btnOpenSyncQueue.disabled = false;
+        dom.btnOpenSyncQueue.textContent = "คิวค้างส่ง";
+      }
     }
+
+    renderSyncQueueModalState();
   }
 
   function clearSyncRetryTimer() {
@@ -3090,9 +3347,11 @@ const imageInflightCache = new Map();
     const now = Date.now();
     const manual = Boolean(options.manual);
     const excludeIds = options.excludeIds instanceof Set ? options.excludeIds : null;
+    const includeIds = options.includeIds instanceof Set ? options.includeIds : null;
 
     return state.sync.queue.find((item) => {
       if (excludeIds && excludeIds.has(item.id)) return false;
+      if (includeIds && !includeIds.has(item.id)) return false;
       if (item.status === "syncing") return false;
       if (manual) return true;
       const nextTime = Number(item.nextRetryAtMs || 0);
@@ -5750,6 +6009,10 @@ const imageInflightCache = new Map();
       closeUserDeleteConfirmModal();
       return;
     }
+    if (state.syncQueueModal.open) {
+      closeSyncQueueModal();
+      return;
+    }
     if (state.userSetting.open) {
       closeUserSettingModal();
       return;
@@ -5790,6 +6053,7 @@ const imageInflightCache = new Map();
       state.userMgmt.open ||
       state.userSetting.open ||
       state.userDeleteConfirm.open ||
+      state.syncQueueModal.open ||
       state.dashboard.open ||
       state.auth.loginOpen;
     dom.body.classList.toggle("no-scroll", shouldLock);

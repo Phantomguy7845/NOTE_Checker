@@ -938,6 +938,66 @@ textarea.is-invalid {
   justify-content: flex-start;
 }
 
+.sync-queue-hint {
+  margin-bottom: 10px;
+}
+
+.sync-queue-list {
+  gap: 10px;
+}
+
+.sync-queue-card {
+  gap: 8px;
+}
+
+.sync-queue-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.sync-queue-card__title {
+  margin: 0;
+  color: var(--navy);
+  font-size: 0.95rem;
+}
+
+.sync-queue-card__meta {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.sync-queue-card__error {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: #fff7fa;
+  border: 1px solid #ffd4de;
+  color: #8d2140;
+  font-size: 0.82rem;
+}
+
+.sync-queue-card__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.modal-card__header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chip--syncing {
+  color: #0e4ea8;
+  background: #e9f3ff;
+  border-color: #cfe2ff;
+}
+
 .history-panel {
   position: fixed;
   top: 0;
@@ -1942,6 +2002,14 @@ textarea.is-invalid {
     width: 38px;
     height: 38px;
     border-radius: 12px;
+  }
+
+  .sync-queue-card__header {
+    flex-direction: column;
+  }
+
+  .sync-queue-card__actions .btn {
+    flex: 1 1 140px;
   }
 
   .note-card {
